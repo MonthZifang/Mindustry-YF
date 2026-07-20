@@ -1,0 +1,62 @@
+Mindustry adalah sebuah game manajemen pembangunan industri dengan elemen RTS dan menara pertahanan. Buat rantai pasokan yang rumit untuk memasukkan amunisi ke menara Anda, menghasilkan material yang digunakan untuk membangun, dan membuat unit. Perintahkan unit untuk merebut markas musuh, dan perluas produksi Anda. Pertahankan inti Anda dari gelombang musuh.
+
+Mainkan kampanye sendirian atau bersama teman-teman Anda dalam lintas platfrom multi pemain co-op dan tantang mereka dalam pertandingan PvP berbasis tim.
+
+[img]{STEAM_APP_IMAGE}/extras/factory.gif[/img]
+
+[h2]Bangunan Pabrik[/h2]
+
+[list]
+[*] Buat rantai pasokan yang rumit untuk memasukkan amunisi ke menara Anda dan menghasilkan bahan yang digunakan untuk membangun
+[*] Gunakan blok produksi untuk membuat berbagai macam material canggih
+[*] Mendistribusikan cairan dan melawan tantangan konstan, seperti bencana kebakaran atau serangan udara musuh
+[*] Dapatkan hasil maksimal dari produksi Anda dengan menyediakan cairan pendingin opsional dan pelumas
+[*] Hasilkan berbagai macam unit untuk otomatis memanajemen markas Anda atau penyerangan ke markas musuh
+[/list]
+
+[h2]Menara Pertahanan[/h2]
+
+[list]
+[*] Pertahankan struktur Anda dari gelombang musuh
+[*] Tempatkan menara Anda secara strategis untuk menghancurkan unit musuh sebelum mencapai inti Anda
+[*] Lengkapi menara Anda dengan amunisi, pendingin, dan tenaga
+[*] Perkuat pertahanan Anda dengan proyektor perisai ,proyektor mender, dan bangunan pendukung lainnya
+[/list]
+
+[img]{STEAM_APP_IMAGE}/extras/rts3.png[/img]
+
+[h2]Strategi Waktu Nyata[/h2]
+
+[list]
+[*] Siapkan jalur perakitan untuk membangun pasukan unit mekanis
+[*] Gunakan unit Anda untuk melawan markas musuh yang berfungsi penuh
+[*] Rebut lebih banyak wilayah untuk menempatkan lebih banyak inti dan dapatkan akses ke sumber daya tambahan untuk ekspansi
+[/list]
+
+[h2]Kampanye[/h2]
+
+[list]
+[*] Mainkan dua kampanye planet yang terpisah
+[*] Taklukkan planet Serpulo dan Erekir saat Anda maju melalui 35 peta buatan tangan dan 250+ sektor yang dihasilkan secara prosedural
+[*] Rebut wilayah dan dirikan pabrik untuk menghasilkan sumber daya selagi Anda bermain di sektor lain
+[*] Pertahankan sektor Anda dari invasi berkala
+[*] Koordinasikan distribusi sumber daya antar sektor melalui alas peluncur
+[*] Riset blok baru untuk mendorong kemajuan
+[*] Undang teman Anda untuk menyelesaikan misi bersama
+[*] 250+ blok teknologi untuk dikuasai
+[*] 50+ jenis drone, mech, dan kapal yang berbeda
+[*] 80+ prestasi untuk diselesaikan
+[/list]
+
+[h2]Komunitas dan Modding[/h2]
+
+[list]
+[*] Gunakan Steam Workshop untuk menelusuri peta dan skematik buatan komunitas
+[*] Bergabunglah dengan server komunitas publik untuk bermain dengan orang lain di berbagai platform
+[*] Mainkan co-op, PvP (Satu lawan Satu) ataupun sandbox
+[*] Server komunitas mendukung plugin untuk peta kostum dan mode permainan khusus
+[*] Buat server khusus publik Anda, atau undang teman ke sesi pribadi Anda sendiri
+[*] Aturan permainan yang dapat disesuaikan: Ubah biaya blok, statistik musuh, muatan sumber daya, waktu gelombang, dan banyak lagi
+[*] Editor peta bawaan memungkinkan Anda membuat peta sendiri untuk dimainkan dan dibagikan dengan komunitas
+[*] Telusuri mod buatan komunitas untuk menambahkan atau mencampur lebih banyak konten
+[/list]

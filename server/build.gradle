@@ -1,0 +1,155 @@
+sourceSets.main.java.srcDirs = ["src/"]
+
+project.ext.mainClassName = "mindustry.server.ServerLauncher"
+project.ext.assetsDir = new File("../core/assets")
+
+configurations{
+    yzfMysqlDriver
+    yzfMariadbDriver
+    yzfPostgresqlDriver
+    yzfRedisDriver
+    yzfMinioDriver
+}
+
+ext.getServerFolder = {
+    return "../deploy/${appName}-server-${getVersionString()}"
+}
+
+tasks.register('run', JavaExec){
+    dependsOn classes
+    mainClass = project.mainClassName
+    classpath = sourceSets.main.runtimeClasspath
+    standardInput = System.in
+    workingDir = project.assetsDir
+    ignoreExitValue = true
+    jvmArgs += ['--add-opens', 'jdk.httpserver/sun.net.httpserver=ALL-UNNAMED']
+    if(project.hasProperty("appArgs")){
+        args Eval.me(appArgs)
+    }
+    if(project.hasProperty("jvmArgs")){
+        jvmArgs((List<String>) Eval.me(project.getProperties()["jvmArgs"]))
+    }
+}
+
+tasks.register('debug', JavaExec){
+    dependsOn classes
+    mainClass = project.mainClassName
+    classpath = sourceSets.main.runtimeClasspath
+    standardInput = System.in
+    workingDir = project.assetsDir
+    ignoreExitValue = true
+    jvmArgs += ['--add-opens', 'jdk.httpserver/sun.net.httpserver=ALL-UNNAMED']
+    debug = true
+}
+
+tasks.register('dist', Jar){
+    dependsOn configurations.runtimeClasspath
+    from files(sourceSets.main.output.classesDirs)
+    from files(sourceSets.main.output.resourcesDir)
+    from{ configurations.runtimeClasspath.collect{ it.isDirectory() ? it : zipTree(it) } }
+    from files(project.assetsDir)
+    exclude("bloomshaders/**")
+    exclude("sprites/**")
+    exclude("music/**")
+    exclude("sounds/**")
+    exclude("fonts/**")
+    exclude("bundles/**")
+    exclude("cubemaps/**")
+    exclude("config/**")
+    exclude("cursors/**")
+    exclude("shaders/**")
+    exclude("icons/icon.icns")
+    exclude("icons/icon.ico")
+    exclude("icons/icon_64.png")
+    exclude("**hs_err**.log")
+    exclude("META-INF/*.SF")
+    exclude("META-INF/*.RSA")
+    exclude("META-INF/*.DSA")
+    exclude("META-INF/INDEX.LIST")
+
+    duplicatesStrategy = 'exclude'
+
+    manifest{
+        attributes 'Main-Class': project.mainClassName
+    }
+}
+
+tasks.register('yzfDriverBundles'){
+    dependsOn configurations.yzfMysqlDriver, configurations.yzfMariadbDriver, configurations.yzfPostgresqlDriver, configurations.yzfRedisDriver, configurations.yzfMinioDriver
+
+    doLast{
+        def outputRoot = file("$buildDir/yzf-driver-bundles")
+        delete outputRoot
+
+        [
+            'mysql-default': configurations.yzfMysqlDriver,
+            'mariadb-default': configurations.yzfMariadbDriver,
+            'postgresql-default': configurations.yzfPostgresqlDriver,
+            'redis-default': configurations.yzfRedisDriver,
+            'minio-default': configurations.yzfMinioDriver
+        ].each{ driverId, conf ->
+            copy{
+                from conf
+                into new File(outputRoot, driverId)
+            }
+        }
+    }
+}
+
+tasks.register('dzip', Zip){
+    from getServerFolder()
+    archiveFileName = "${generateDeployName('server')}.zip"
+    destinationDirectory = file("../deploy/")
+
+    finalizedBy 'cleanup'
+}
+
+tasks.register('cleanup'){
+    doLast{
+        delete{
+            delete getServerFolder()
+        }
+    }
+}
+
+tasks.register('deploy'){
+    dependsOn "dist"
+
+    finalizedBy 'dzip'
+
+    doLast{
+        copy{
+            from "build/libs/server-release.jar"
+            into getServerFolder()
+            rename("server-release.jar", "server.jar")
+        }
+
+        copy{
+            from "server_template"
+            into getServerFolder()
+        }
+    }
+}
+
+dist.dependsOn classes
+
+dependencies{
+    // Embedded Kotlin uses externally supplied jars in runtime-sdk/kotlin-libs
+    // (MDTX-style dependency layout), keeping the production server JAR small.
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:2.3.20"
+    compileOnly "org.jetbrains.kotlin:kotlin-compiler-embeddable:2.3.20"
+    compileOnly "org.jetbrains.kotlin:kotlin-scripting-common:2.3.20"
+    compileOnly "org.jetbrains.kotlin:kotlin-scripting-jvm:2.3.20"
+    compileOnly "org.jetbrains.kotlin:kotlin-scripting-jvm-host:2.3.20"
+    compileOnly "org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable:2.3.20"
+    implementation "org.xerial:sqlite-jdbc:3.50.3.0"
+    implementation "com.zaxxer:HikariCP:6.3.0"
+    implementation "org.jline:jline-reader:3.30.6"
+    implementation "org.jline:jline-terminal:3.30.6"
+    implementation "org.jline:jline-terminal-jansi:3.30.6"
+    yzfMysqlDriver "com.mysql:mysql-connector-j:9.4.0"
+    yzfMariadbDriver "org.mariadb.jdbc:mariadb-java-client:3.5.6"
+    yzfPostgresqlDriver "org.postgresql:postgresql:42.7.8"
+    yzfRedisDriver "redis.clients:jedis:6.1.0"
+    yzfMinioDriver "io.minio:minio:8.5.17"
+}

@@ -1,0 +1,9 @@
+{
+  duplicatePadding: true,
+  combineSubdirectories: true,
+  flattenPaths: true,
+  maxWidth: 2048,
+  maxHeight: 2048,
+  fast: true,
+  stripWhitespaceCenter: true
+}

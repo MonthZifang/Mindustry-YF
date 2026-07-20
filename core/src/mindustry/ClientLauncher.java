@@ -1,0 +1,345 @@
+package mindustry;
+
+import arc.*;
+import arc.assets.*;
+import arc.assets.loaders.*;
+import arc.audio.*;
+import arc.files.*;
+import arc.graphics.*;
+import arc.graphics.g2d.*;
+import arc.math.*;
+import arc.util.*;
+import arc.util.io.*;
+import mindustry.ai.*;
+import mindustry.audio.*;
+import mindustry.core.*;
+import mindustry.ctype.*;
+import mindustry.game.EventType.*;
+import mindustry.game.*;
+import mindustry.game.Saves.*;
+import mindustry.gen.*;
+import mindustry.graphics.*;
+import mindustry.io.*;
+import mindustry.maps.*;
+import mindustry.mod.*;
+import mindustry.net.*;
+import mindustry.ui.*;
+
+import java.io.*;
+import java.util.zip.*;
+
+import static arc.Core.*;
+import static mindustry.Vars.*;
+
+public abstract class ClientLauncher extends ApplicationCore implements Platform{
+    private static final int loadingFPS = 20;
+
+    private long nextFrame;
+    private long beginTime;
+    private long lastTargetFps = -1;
+    private boolean finished = false;
+    private LoadRenderer loader;
+
+    @Override
+    public void setup(){
+        String dataDir = System.getProperty("mindustry.data.dir", OS.env("MINDUSTRY_DATA_DIR"));
+        if(dataDir != null){
+            Core.settings.setDataDirectory(files.absolute(dataDir));
+        }
+
+        checkLaunch();
+        loadLogger();
+
+        loader = new LoadRenderer();
+        Events.fire(new ClientCreateEvent());
+
+        loadFileLogger();
+        platform = this;
+        maxTextureSize = Gl.getInt(Gl.maxTextureSize);
+        beginTime = Time.millis();
+
+        //debug GL information
+        Log.info("[GL] Version: @", graphics.getGLVersion());
+        Log.info("[GL] Max texture size: @", maxTextureSize);
+        Log.info("[GL] Using @ API.", gl30 != null ? "OpenGL 3" : "OpenGL 2");
+
+        IntelGpuCheck.init(graphics.getGLVersion().vendorString);
+
+        boolean isIntel = IntelGpuCheck.wasIntel();
+
+        if(isIntel && !graphics.isGL30Available()) Log.warn("[GL] Intel GPU detected on previous launch. Due to memory corruption issues, OpenGL 3 support has been disabled for Intel GPUs. See issue #11041.");
+
+        if(gl30 == null && !isIntel) Log.warn("[GL] Your device or video drivers do not support OpenGL 3. This will cause performance issues.");
+
+        if(NvGpuInfo.hasMemoryInfo()) Log.info("[GL] Total available VRAM: @mb", NvGpuInfo.getMaxMemoryKB()/1024);
+
+        if(maxTextureSize < 4096) Log.warn("[GL] Your maximum texture size is below the recommended minimum of 4096. This will cause severe performance issues.");
+
+        Log.info("[JAVA] Version: @", OS.javaVersion);
+        if(Core.app.isAndroid()){
+            Log.info("[ANDROID] API level: @", Core.app.getVersion());
+        }
+        long ram = Runtime.getRuntime().maxMemory();
+        boolean gb = ram >= 1024 * 1024 * 1024;
+        if(!OS.isIos){
+            Log.info("[RAM] Available: @ @", Strings.fixed(gb ? ram / 1024f / 1024 / 1024f : ram / 1024f / 1024f, 1), gb ? "GB" : "MB");
+        }
+
+        Time.setDeltaProvider(() -> {
+            float result = Core.graphics.getDeltaTime() * 60f;
+            return (Float.isNaN(result) || Float.isInfinite(result)) ? 1f : Mathf.clamp(result, 0.0001f, maxDeltaClient);
+        });
+
+        UI.loadColors();
+        batch = new SpriteBatch();
+        assets = new AssetManager();
+        assets.setLoader(Texture.class, "." + mapExtension, new MapPreviewLoader());
+
+        tree = new FileTree();
+        assets.setLoader(Sound.class, new SoundLoader(tree){
+            @Override
+            public void loadAsync(AssetManager manager, String fileName, Fi file, SoundParameter parameter){
+
+            }
+
+            @Override
+            public Sound loadSync(AssetManager manager, String fileName, Fi file, SoundParameter parameter){
+                if(parameter != null && parameter.sound != null){
+                    parameter.sound.loadLazy(file);
+
+                    return parameter.sound;
+                }else{
+                    Sound sound = new Sound();
+                    sound.loadLazy(file);
+                    return sound;
+                }
+            }
+        });
+        assets.setLoader(Music.class, new MusicLoader(tree){
+            @Override
+            public void loadAsync(AssetManager manager, String fileName, Fi file, MusicParameter parameter){}
+
+            @Override
+            public Music loadSync(AssetManager manager, String fileName, Fi file, MusicParameter parameter){
+                if(parameter != null && parameter.music != null){
+                    mainExecutor.submit(() -> {
+                        try{
+                            parameter.music.load(file);
+                        }catch(Throwable t){
+                            Log.err("Error loading music: " + file, t);
+                        }
+                    });
+
+                    return parameter.music;
+                }else{
+                    Music music = new Music();
+
+                    mainExecutor.submit(() -> {
+                        try{
+                            music.load(file);
+                        }catch(Throwable t){
+                            Log.err("Error loading music: " + file, t);
+                        }
+                    });
+
+                    return music;
+                }
+            }
+        });
+
+        assets.load("sprites/error.png", Texture.class);
+        atlas = TextureAtlas.blankAtlas();
+        Vars.net = new Net(platform.getNet());
+        MapPreviewLoader.setupLoaders();
+        mods = new Mods();
+        schematics = new Schematics();
+
+        Fonts.loadSystemCursors();
+
+        assets.load(new Vars());
+
+        Fonts.loadDefaultFont();
+
+        //load fallback atlas if max texture size is below 4096
+        assets.load(new AssetDescriptor<>(maxTextureSize >= 4096 ? "sprites/sprites.aatls" : "sprites/fallback/sprites.aatls", TextureAtlas.class)).loaded = t -> atlas = t;
+        assets.loadRun("maps", Map.class, () -> maps.loadPreviews());
+
+        Musics.load();
+        Sounds.load();
+
+        assets.loadRun("contentcreate", Content.class, () -> {
+            content.createBaseContent();
+            content.loadColors();
+        }, () -> {
+            mods.loadScripts();
+            content.createModContent();
+        });
+
+        assets.load(mods);
+        assets.loadRun("mergeUI", PixmapPacker.class, () -> {}, () -> Fonts.mergeFontAtlas(atlas));
+
+        add(logic = new Logic());
+        add(control = new Control());
+        add(renderer = new Renderer());
+        add(ui = new UI());
+        add(netServer = new NetServer());
+        add(netClient = new NetClient());
+
+        assets.load(schematics);
+
+        assets.loadRun("contentinit", ContentLoader.class, () -> content.init(), () -> content.load());
+        assets.loadRun("baseparts", BaseRegistry.class, () -> {}, () -> bases.load());
+    }
+
+    @Override
+    public void add(ApplicationListener module){
+        super.add(module);
+
+        //autoload modules when necessary
+        if(module instanceof Loadable l){
+            assets.load(l);
+        }
+    }
+
+    @Override
+    public void resize(int width, int height){
+        if(assets == null) return;
+
+        if(!finished){
+            Draw.proj().setOrtho(0, 0, width, height);
+        }else{
+            super.resize(width, height);
+        }
+    }
+
+    @Override
+    public void update(){
+        PerfCounter.update.begin();
+
+        int targetfps = ios ? 0 : Core.settings.getInt("fpscap", 120);
+        boolean changed = lastTargetFps != targetfps && lastTargetFps != -1;
+        boolean limitFps = targetfps > 0 && targetfps <= 240;
+
+        lastTargetFps = targetfps;
+
+        if(limitFps && !changed){
+            nextFrame += (1000 * 1000000) / targetfps;
+        }else{
+            nextFrame = Time.nanos();
+        }
+
+        if(!finished){
+            if(loader != null){
+                loader.draw();
+            }
+            if(assets.update(1000 / loadingFPS)){
+                loader.dispose();
+                loader = null;
+                SoundPriority.init();
+                for(ApplicationListener listener : modules){
+                    listener.init();
+                }
+                mods.eachClass(Mod::init);
+                finished = true;
+                Events.fire(new ClientLoadEvent());
+                Log.info("Total time to load: @ms", Time.timeSinceMillis(beginTime));
+                clientLoaded = true;
+                super.resize(graphics.getWidth(), graphics.getHeight());
+                app.post(() -> app.post(() -> app.post(() -> app.post(() -> {
+                    super.resize(graphics.getWidth(), graphics.getHeight());
+
+                    //mark initialization as complete
+                    finishLaunch();
+                }))));
+            }
+        }else{
+            asyncCore.begin();
+
+            super.update();
+
+            asyncCore.end();
+        }
+
+        if(limitFps){
+            long current = Time.nanos();
+            if(nextFrame > current){
+                long toSleep = nextFrame - current;
+                Threads.sleep(toSleep / 1000000, (int)(toSleep % 1000000));
+            }
+        }
+
+        PerfCounter.update.end();
+
+        long rawUpdate = PerfCounter.update.latestValueNs();
+        for(var other : PerfCounter.displayedCounters){
+            if(other != PerfCounter.other) rawUpdate -= other.latestValueNs();
+        }
+        PerfCounter.other.add(rawUpdate);
+
+        for(var counter : PerfCounter.all){
+            counter.checkUpdate();
+        }
+    }
+
+    @Override
+    public void exit(){
+        //on graceful exit, finish the launch normally.
+        Vars.finishLaunch();
+    }
+
+    @Override
+    public void init(){
+        nextFrame = Time.nanos();
+        setup();
+    }
+
+    @Override
+    public void resume(){
+        if(finished){
+            super.resume();
+        }
+    }
+
+    @Override
+    public void pause(){
+        //when the user tabs out on mobile, the exit() event doesn't fire reliably - in that case, just assume they're about to kill the app
+        //this isn't 100% reliable but it should work for most cases
+        if(mobile){
+            Vars.finishLaunch();
+        }
+        if(finished){
+            super.pause();
+        }
+    }
+
+    @Override
+    public void fileDropped(Fi file){
+        if(OS.isIos) return;
+
+        if(file.extension().equalsIgnoreCase(saveExtension)){ //open save
+            try{
+                if(SaveIO.isSaveValid(file)){
+                    SaveMeta meta = SaveIO.getMeta(new DataInputStream(new InflaterInputStream(file.read(Streams.defaultBufferSize))));
+                    if(meta.tags.containsKey("name")){
+                        //is map
+                        if(!ui.editor.isShown()){
+                            ui.editor.show();
+                        }
+
+                        ui.editor.beginEditMap(file);
+                    }else if(meta.rules.sector == null){ //don't allow importing campaign saves, they are broken
+                        SaveSlot slot = control.saves.importSave(file);
+                        ui.load.runLoadSave(slot);
+                    }else{
+                        ui.showErrorMessage("@save.nocampaign");
+                    }
+                }else{
+                    ui.showErrorMessage("@save.import.invalid");
+                }
+            }catch(Throwable e){
+                ui.showException("@save.import.fail", e);
+            }
+        }
+
+    }
+}

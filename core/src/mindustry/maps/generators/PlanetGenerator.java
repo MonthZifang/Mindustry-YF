@@ -1,0 +1,203 @@
+package mindustry.maps.generators;
+
+import arc.*;
+import arc.graphics.g2d.*;
+import arc.math.geom.*;
+import arc.struct.*;
+import arc.struct.ObjectIntMap.*;
+import arc.util.*;
+import arc.util.noise.*;
+import mindustry.content.*;
+import mindustry.ctype.*;
+import mindustry.game.*;
+import mindustry.gen.*;
+import mindustry.graphics.g3d.*;
+import mindustry.type.*;
+import mindustry.type.Weather.*;
+import mindustry.ui.*;
+import mindustry.world.*;
+
+import static mindustry.Vars.*;
+
+public abstract class PlanetGenerator extends BasicGenerator implements HexMesher{
+    protected static @Nullable ItemSeq tmpItems;
+
+    public int baseSeed = 0;
+    public int seed = 0;
+
+    protected @Nullable Sector sector;
+
+    public void generateSector(Sector sector){
+
+    }
+
+    public void onSectorCaptured(Sector sector){
+
+    }
+
+    public void onSectorLost(Sector sector){
+
+    }
+
+    public void beforeSaveWrite(Sector sector){
+
+    }
+
+    public void getLockedText(Sector hovered, StringBuilder out){
+        out.append("[gray]").append(Iconc.lock).append(" ").append(Core.bundle.get("locked"));
+    }
+
+    public @Nullable TextureRegion getLockedIcon(Sector hovered){
+        return (hovered.preset == null && !hovered.planet.allowLaunchToNumbered ? null : Fonts.getLargeIcon("lock"));
+    }
+
+    /** @return whether to allow landing on the specified procedural sector */
+    public boolean allowLanding(Sector sector){
+        return sector.planet.allowLaunchToNumbered && (sector.hasBase() || sector.near().contains(Sector::hasBase));
+    }
+
+    public @Nullable Sector findLaunchCandidate(Sector destination, @Nullable Sector selected){
+        if(!destination.allowLaunchLoadout() && destination.preset != null){
+            if(tmpItems == null) tmpItems = new ItemSeq();
+            tmpItems.clear();
+
+            var rules = destination.preset.generator.map.rules();
+            for(var stack : rules.loadout){
+                if(stack.item.isOnPlanet(destination.planet)){
+                    tmpItems.add(stack.item, stack.amount);
+                }
+            }
+
+            //currently played (selected) sector has all the resources
+            if(selected != null && selected.planet == destination.planet && selected.hasBase() && selected.items().has(tmpItems) && !selected.isAttacked()){
+                return selected;
+            }else{
+                //find the closest sector that has resources (ranked by distance, not item quantity)
+                return destination.planet.sectors.min(s -> s.hasBase() && !s.isAttacked() && s.items().has(tmpItems), s -> s.tile.v.dst(destination.tile.v));
+            }
+        }else{
+            Sector launchSector = selected != null && selected.planet == destination.planet && selected.hasBase() && !selected.isAttacked() ? selected : null;
+            //directly nearby.
+            if(destination.near().contains(launchSector)) return launchSector;
+
+            Sector launchFrom = launchSector;
+            if(launchFrom == null || destination.preset == null){
+                //TODO pick one with the most resources
+                launchFrom = destination.near().find(s -> s.hasBase() && !s.isAttacked());
+                if(launchFrom == null && destination.preset != null){
+                    if(launchSector != null) return launchSector;
+                    launchFrom = destination.planet.sectors.min(s -> s.hasBase() && !s.isAttacked(), s -> s.tile.v.dst2(destination.tile.v));
+                }
+            }
+
+            return launchFrom;
+        }
+    }
+
+    /** @return whether to allow landing on the specified procedural sector */
+    public boolean allowAcceleratorLanding(Sector sector){
+        return sector.planet.allowLaunchToNumbered;
+    }
+
+    public void addWeather(Sector sector, Rules rules){
+        rules.weather.clear();
+
+        //apply weather based on terrain
+        ObjectIntMap<Block> floorc = new ObjectIntMap<>();
+        ObjectSet<UnlockableContent> content = new ObjectSet<>();
+
+        for(Tile tile : world.tiles){
+            if(world.getDarkness(tile.x, tile.y) >= 3){
+                continue;
+            }
+
+            Liquid liquid = tile.floor().liquidDrop;
+            if(tile.floor().itemDrop != null) content.add(tile.floor().itemDrop);
+            if(tile.overlay().itemDrop != null) content.add(tile.overlay().itemDrop);
+            if(liquid != null) content.add(liquid);
+
+            if(!tile.block().isStatic()){
+                floorc.increment(tile.floor());
+                if(tile.overlay() != Blocks.air){
+                    floorc.increment(tile.overlay());
+                }
+            }
+        }
+
+        //sort counts in descending order
+        Seq<Entry<Block>> entries = floorc.entries().toArray();
+        entries.sort(e -> -e.value);
+        //remove all blocks occurring < 30 times - unimportant
+        entries.removeAll(e -> e.value < 30);
+
+        Block[] floors = new Block[entries.size];
+        for(int i = 0; i < entries.size; i++){
+            floors[i] = entries.get(i).key;
+        }
+
+        //bad contains() code, but will likely never be fixed
+        boolean hasSnow = floors.length > 0 && (floors[0].name.contains("ice") || floors[0].name.contains("snow"));
+        boolean hasRain = floors.length > 0 && !hasSnow && content.contains(Liquids.water) && !floors[0].name.contains("sand");
+        boolean hasDesert = floors.length > 0 && !hasSnow && !hasRain && floors[0] == Blocks.sand;
+        boolean hasSpores = floors.length > 0 && (floors[0].name.contains("spore") || floors[0].name.contains("moss") || floors[0].name.contains("tainted"));
+
+        if(hasSnow){
+            rules.weather.add(new WeatherEntry(Weathers.snow));
+        }
+
+        if(hasRain){
+            rules.weather.add(new WeatherEntry(Weathers.rain));
+            rules.weather.add(new WeatherEntry(Weathers.fog));
+        }
+
+        if(hasDesert){
+            rules.weather.add(new WeatherEntry(Weathers.sandstorm));
+        }
+
+        if(hasSpores){
+            rules.weather.add(new WeatherEntry(Weathers.sporestorm));
+        }
+    }
+
+    protected void genTile(Vec3 position, TileGen tile){
+
+    }
+
+    @Override
+    protected float noise(float x, float y, double octaves, double falloff, double scl, double mag){
+        Vec3 v = sector.rect.project(x, y);
+        return Simplex.noise3d(0, octaves, falloff, 1f / scl, v.x, v.y, v.z) * (float)mag;
+    }
+
+    /** @return the scaling factor for sector rects. */
+    public float getSizeScl(){
+        return 3200;
+    }
+
+    public int getSectorSize(Sector sector){
+        int res = (int)(sector.rect.radius * getSizeScl());
+        return res % 2 == 0 ? res : res + 1;
+    }
+
+    public void generate(Tiles tiles, Sector sec, WorldParams params){
+        this.tiles = tiles;
+        this.seed = params.seedOffset + baseSeed;
+        this.sector = sec;
+        this.width = tiles.width;
+        this.height = tiles.height;
+        this.rand.setSeed(sec.id + params.seedOffset + baseSeed);
+
+        TileGen gen = new TileGen();
+        for(int y = 0; y < height; y++){
+            for(int x = 0; x < width; x++){
+                gen.reset();
+                Vec3 position = sector.rect.project(x / (float)tiles.width, y / (float)tiles.height);
+
+                genTile(position, gen);
+                tiles.set(x, y, new Tile(x, y, gen.floor, gen.overlay, gen.block));
+            }
+        }
+
+        generate(tiles, params);
+    }
+}

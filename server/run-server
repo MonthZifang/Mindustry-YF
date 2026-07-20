@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+if [[ $# -eq 0 ]] ; then
+    echo 'A build version must be supplied as the first argument.'
+    exit 1
+fi
+
+cd ..
+
+./gradlew server:dist -Pbuildversion=$1
+
+excode=$?
+
+if [ $excode -ne 0 ]; then
+	echo $excode
+  	exit 1
+fi
+
+stopping=0
+trap 'stopping=1' INT TERM
+
+while true; do
+#auto-restart until ctrl-c or exit 0
+java -XX:+HeapDumpOnOutOfMemoryError -jar server/build/libs/server-release.jar
+excode=$?
+if [ $stopping -eq 1 ] || [ $excode -eq 0 ] || [ $excode -eq 130 ] || [ $excode -eq 143 ]; then
+   exit 0
+fi
+done

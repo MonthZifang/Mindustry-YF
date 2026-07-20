@@ -1,0 +1,619 @@
+package mindustry.core;
+
+import arc.*;
+import arc.math.*;
+import arc.util.*;
+import mindustry.*;
+import mindustry.ai.*;
+import mindustry.annotations.Annotations.*;
+import mindustry.content.*;
+import mindustry.core.GameState.*;
+import mindustry.ctype.*;
+import mindustry.entities.*;
+import mindustry.game.EventType.*;
+import mindustry.game.*;
+import mindustry.game.Teams.*;
+import mindustry.gen.*;
+import mindustry.maps.*;
+import mindustry.type.*;
+import mindustry.type.Weather.*;
+import mindustry.world.*;
+import mindustry.world.blocks.environment.*;
+import mindustry.world.blocks.storage.*;
+import mindustry.world.blocks.storage.CoreBlock.*;
+
+import java.util.*;
+
+import static mindustry.Vars.*;
+
+/**
+ * Logic module.
+ * Handles all logic for entities and waves.
+ * Handles game state events.
+ * Does not store any game state itself.
+ * <p>
+ * This class should <i>not</i> call any outside methods to change state of modules, but instead fire events.
+ */
+public class Logic implements ApplicationListener{
+
+    public Logic(){
+
+        Events.on(BlockDestroyEvent.class, event -> {
+            //skip if rule is off
+            if(!state.rules.ghostBlocks) return;
+
+            //blocks that get broken are appended to the team's broken block queue
+            Tile tile = event.tile;
+            //skip null entities or un-rebuildables, for obvious reasons
+            if(tile.build == null || !tile.block().rebuildable) return;
+
+            tile.build.addPlan(true);
+        });
+
+        Events.on(BlockBuildEndEvent.class, event -> {
+            if(!event.breaking){
+                checkOverlappingPlans(event.team, event.tile);
+
+                if(event.team == state.rules.defaultTeam){
+                    state.stats.placedBlockCount.increment(event.tile.block());
+                }
+            }
+        });
+
+        Events.on(PayloadDropEvent.class, e -> {
+            if(e.build != null){
+                checkOverlappingPlans(e.build.team, e.build.tile);
+            }
+        });
+
+        //when loading a 'damaged' sector, propagate the damage
+        Events.on(SaveLoadEvent.class, e -> {
+            if(state.isCampaign()){
+                state.rules.coreIncinerates = true;
+                state.rules.canGameOver = true;
+                state.rules.allowEditRules = false;
+
+                //fresh map has no sector info
+                if(!e.isMap){
+                    SectorInfo info = state.rules.sector.info;
+                    info.write();
+
+                    state.getSector().planet.applyRules(state.rules);
+
+                    info.hasCore = true;
+
+                    state.rules.sector.saveInfo();
+                }
+            }
+        });
+
+        Events.on(PlayEvent.class, e -> {
+            //reset weather on play
+            var randomWeather = state.rules.weather.copy().shuffle();
+            float sum = 0f;
+            for(var weather : randomWeather){
+                weather.cooldown = sum + Mathf.random(weather.maxFrequency);
+                sum += weather.cooldown;
+            }
+            //tick resets on new save play
+            state.tick = 0f;
+        });
+
+        Events.on(WorldLoadEvent.class, e -> {
+
+            if(state.isCampaign()){
+                //enable building AI on campaign unless the preset disables it
+                state.rules.coreIncinerates = true;
+                state.rules.infiniteResources = false;
+                state.rules.allowEditRules = false;
+                state.rules.allowEditWorldProcessors = false;
+                state.rules.worldProcessorPlayerLink = false;
+
+                if(state.getPlanet().enemyInfiniteItems){
+                    state.rules.waveTeam.rules().infiniteResources = true;
+                    state.rules.waveTeam.rules().fillItems = true;
+                }
+                state.rules.waveTeam.rules().buildSpeedMultiplier *= state.getPlanet().enemyBuildSpeedMultiplier;
+
+                if(state.getPlanet().enemyFactoryActivationDelay > 0f && state.rules.waveTeam.rules().unitFactoryActivationDelay == 0f){
+                    state.rules.waveTeam.rules().unitFactoryActivationDelay = state.getPlanet().enemyFactoryActivationDelay;
+                }
+            }
+
+            //save settings
+            Core.settings.manualSave();
+        });
+
+        //sync research
+        Events.on(UnlockEvent.class, e -> {
+            if(net.server()){
+                Call.researched(e.content);
+            }
+        });
+
+        Events.on(SectorCaptureEvent.class, e -> {
+            if(!net.client() && e.sector == state.getSector() && e.sector.isBeingPlayed()){
+                state.rules.waveTeam.data().destroyToDerelict();
+            }
+
+            if(e.sector.planet.sectorCaptureReplacements.size > 0){
+                boolean any = false;
+                //faster mapping, avoids objectmap per-tile
+                Floor[] map = new Floor[content.blocks().size];
+                for(var entry : e.sector.planet.sectorCaptureReplacements){
+                    if(indexer.isBlockPresent(entry.key)){
+                        map[entry.key.id] = entry.value.asFloor();
+                        any = true;
+                    }
+                }
+                if(any){
+                    world.tiles.eachTile(t -> {
+                        Floor result = map[t.floor().id];
+                        if(result != null){
+                            t.setFloor(result);
+                        }
+                    });
+                }
+            }
+
+            if(!net.client() && e.sector.planet.generator != null){
+                e.sector.planet.generator.onSectorCaptured(e.sector);
+            }
+
+            if(checkCampaignStats()){
+                state.getPlanet().stats().sectorsCaptured ++;
+            }
+        });
+
+        Events.on(SectorLoseEvent.class, e -> {
+            if(!net.client() && e.sector.planet.generator != null){
+                e.sector.planet.generator.onSectorLost(e.sector);
+            }
+        });
+
+        Events.on(BlockDestroyEvent.class, e -> {
+            if(e.tile.build instanceof CoreBuild core && core.team.isAI() && state.rules.coreDestroyClear){
+                Core.app.post(() -> core.team.data().timeDestroy(core.x, core.y, state.rules.enemyCoreBuildRadius));
+            }
+        });
+
+        //listen to core changes; if all cores have been destroyed, set to derelict.
+        Events.on(CoreChangeEvent.class, e -> Core.app.post(() -> {
+            if(state.rules.cleanupDeadTeams && state.rules.pvp && !e.core.isAdded() && e.core.team != Team.derelict && e.core.team.cores().isEmpty()){
+                e.core.team.data().destroyToDerelict();
+            }
+        }));
+
+        Events.on(BlockBuildEndEvent.class, e -> {
+
+            if((e.team == state.rules.defaultTeam || e.unit != null && e.unit.team == state.rules.defaultTeam)){
+                if(e.breaking){
+                    state.stats.buildingsDeconstructed++;
+                }else{
+                    state.stats.buildingsBuilt++;
+                }
+
+                if(checkCampaignStats()){
+                    (e.breaking ? state.getPlanet().stats().buildingsDeconstructed : state.getPlanet().stats().buildingsBuilt).increment(e.tile.block());
+                }
+            }
+        });
+
+        Events.on(BlockDestroyEvent.class, e -> {
+            if(e.tile.team() == state.rules.defaultTeam){
+                state.stats.buildingsDestroyed ++;
+
+                if(checkCampaignStats()){
+                    state.getPlanet().stats().buildingsDestroyed.increment(e.tile.block());
+                }
+            }else{ //...should derelict blocks count as 'destroyed'? technically, they could be destroyed by the enemy, but that is very rare
+                state.stats.destroyedBlockCount.increment(e.tile.block());
+
+                if(checkCampaignStats()){
+                    state.getPlanet().stats().enemyBuildingsDestroyed.increment(e.tile.block());
+                }
+            }
+        });
+
+        Events.on(UnitDestroyEvent.class, e -> {
+            if(e.unit.team != state.rules.defaultTeam){
+                state.stats.enemyUnitsDestroyed ++;
+            }
+
+            if(checkCampaignStats()){
+                (e.unit.team != state.rules.defaultTeam ? state.getPlanet().stats().enemyUnitsDestroyed : state.getPlanet().stats().unitsDestroyed).increment(e.unit.type);
+            }
+        });
+
+        Events.on(UnitCreateEvent.class, e -> {
+            if(e.unit.team == state.rules.defaultTeam){
+                state.stats.unitsCreated++;
+
+                if(checkCampaignStats()){
+                    state.getPlanet().stats().unitsProduced.increment(e.unit.type);
+                }
+            }
+        });
+
+        Events.on(WaveEvent.class, e -> {
+            if(checkCampaignStats()){
+                state.getPlanet().stats().wavesLasted ++;
+            }
+        });
+
+        Events.on(GameOverEvent.class, e -> {
+            if(checkCampaignStats()){
+                state.getPlanet().stats().sectorsLost ++;
+            }
+        });
+    }
+
+    private boolean checkCampaignStats(){
+        return state.isCampaign() && !net.client();
+    }
+
+    private void checkOverlappingPlans(Team team, Tile tile){
+        TeamData data = team.data();
+        Iterator<BlockPlan> it = data.plans.iterator();
+        var bounds = tile.block().bounds(tile.x, tile.y, Tmp.r1);
+        while(it.hasNext()){
+            BlockPlan b = it.next();
+            if(bounds.overlaps(b.block.bounds(b.x, b.y, Tmp.r2))){
+                b.removed = true;
+                it.remove();
+            }
+        }
+    }
+
+    /** Adds starting items, resets wave time, and sets state to playing. */
+    public void play(){
+        state.set(State.playing);
+        //grace period of 2x wave time before game starts
+        state.wavetime = (state.rules.initialWaveSpacing <= 0 ? state.rules.waveSpacing * 2 : state.rules.initialWaveSpacing) * (state.isCampaign() ? state.getPlanet().campaignRules.difficulty.waveTimeMultiplier : 1f);
+        state.stats = new GameStats();
+        Events.fire(new PlayEvent());
+
+        //add starting items
+        if(!state.isCampaign() || !state.rules.sector.planet.allowLaunchLoadout || (state.rules.sector.preset != null && state.rules.sector.preset.addStartingItems)){
+            for(TeamData team : state.teams.getActive()){
+                if(team.hasCore()){
+                    CoreBuild entity = team.core();
+                    entity.items.clear();
+
+                    for(ItemStack stack : state.rules.loadout){
+                        //make sure to cap storage
+                        entity.items.add(stack.item, Math.min(stack.amount, entity.storageCapacity - entity.items.get(stack.item)));
+                    }
+                }
+            }
+        }
+
+        //heal all cores on game start
+        for(TeamData team : state.teams.getActive()){
+            for(var entity : team.cores){
+                entity.heal();
+            }
+        }
+    }
+
+    public void reset(){
+        Groups.clear();
+        Time.clear();
+        Events.fire(new ResetEvent());
+        world.tiles = new Tiles(0, 0);
+
+        state.data.unload();
+        State prev = state.getState();
+        //recreate gamestate - sets state to menu
+        state = new GameState();
+        //fire change event, since it was technically changed
+        Events.fire(new StateChangeEvent(prev, State.menu));
+
+        Core.settings.manualSave();
+    }
+
+    public void skipWave(){
+        runWave();
+    }
+
+    public void runWave(){
+        spawner.spawnEnemies();
+        state.wave++;
+        state.wavetime = state.rules.waveSpacing * (state.isCampaign() ? state.getPlanet().campaignRules.difficulty.waveTimeMultiplier : 1f);
+
+        Events.fire(new WaveEvent());
+    }
+
+    private void checkGameState(){
+        //campaign maps do not have a 'win' state!
+        if(state.isCampaign()){
+            //gameover only when cores are dead
+            if(state.teams.playerCores().size == 0 && !state.gameOver){
+                state.gameOver = true;
+                Events.fire(new GameOverEvent(state.rules.waveTeam));
+            }
+
+            //check if there are no enemy spawns
+            if(state.rules.waves && spawner.countSpawns() + state.teams.cores(state.rules.waveTeam).size <= 0){
+                //if yes, waves get disabled
+                state.rules.waves = false;
+            }
+
+            //if there's a "win" wave and no enemies are present, win automatically
+            if(state.rules.waves && (state.enemies == 0 && state.rules.winWave > 0 && state.wave >= state.rules.winWave && !spawner.isSpawning()) ||
+                (state.rules.attackMode && !state.rules.waveTeam.isAlive())){
+
+                if(state.rules.sector.preset != null && state.rules.sector.preset.attackAfterWaves && !state.rules.attackMode){
+                    //activate attack mode to destroy cores after waves are done.
+                    state.rules.attackMode = true;
+                    state.rules.waves = false;
+                    Call.setRules(state.rules);
+                }else{
+                    Call.sectorCapture();
+                }
+            }
+        }else{
+            if(!state.rules.attackMode && state.teams.playerCores().size == 0 && !state.gameOver){
+                state.gameOver = true;
+                Events.fire(new GameOverEvent(state.rules.waveTeam));
+            }else if(state.rules.attackMode){
+                //count # of teams alive
+                int countAlive = state.teams.getActive().count(t -> t.isAlive() && t.team != Team.derelict);
+
+                if((countAlive <= 1 || (!state.rules.pvp && state.rules.defaultTeam.core() == null)) && !state.gameOver){
+                    //find team that won
+                    TeamData left = state.teams.getActive().find(t -> t.isAlive() && t.team != Team.derelict);
+                    Events.fire(new GameOverEvent(left == null ? Team.derelict : left.team));
+                    state.gameOver = true;
+                }
+            }else if(!state.gameOver && state.rules.waves && (state.enemies == 0 && state.rules.winWave > 0 && state.wave >= state.rules.winWave && !spawner.isSpawning())){
+                state.gameOver = true;
+                Events.fire(new GameOverEvent(state.rules.defaultTeam));
+            }
+        }
+    }
+
+    protected void updateWeather(){
+        state.rules.weather.removeAll(w -> w.weather == null);
+
+        for(WeatherEntry entry : state.rules.weather){
+            //update cooldown
+            entry.cooldown -= Time.delta;
+
+            //create new event when not active
+            if((entry.cooldown < 0 || entry.always) && !entry.weather.isActive()){
+                float duration = entry.always ? Float.POSITIVE_INFINITY : Mathf.random(entry.minDuration, entry.maxDuration);
+                entry.cooldown = duration + Mathf.random(entry.minFrequency, entry.maxFrequency);
+                Tmp.v1.setToRandomDirection();
+                Call.createWeather(entry.weather, entry.intensity, duration, Tmp.v1.x, Tmp.v1.y);
+            }
+        }
+    }
+
+    @Remote(called = Loc.server)
+    public static void sectorCapture(){
+        //the sector has been conquered - waves get disabled
+        state.rules.waves = false;
+
+        if(state.rules.sector == null){
+            //disable attack mode
+            state.rules.attackMode = false;
+            return;
+        }
+
+        boolean initial = !state.rules.sector.info.wasCaptured;
+
+        state.rules.sector.info.wasCaptured = true;
+
+        //fire capture event
+        Events.fire(new SectorCaptureEvent(state.rules.sector, initial));
+
+        //disable attack mode
+        state.rules.attackMode = false;
+
+        //map is over, no more world processor objective stuff
+        state.rules.disableWorldProcessors = true;
+
+        Call.clearObjectives();
+
+        //save, just in case
+        if(!headless && !net.client()){
+            control.saves.saveSector(state.rules.sector);
+        }
+    }
+
+    @Remote(called = Loc.both)
+    public static void updateGameOver(Team winner){
+        state.gameOver = true;
+        if(!headless){
+            state.won = player.team() == winner;
+        }
+    }
+
+    @Remote(called = Loc.both)
+    public static void gameOver(Team winner){
+        state.stats.wavesLasted = state.wave;
+        state.won = player.team() == winner;
+        Time.run(60f * 3f, () -> ui.restart.show(winner));
+        netClient.setQuiet();
+    }
+
+    //called when the remote server researches something
+    @Remote
+    public static void researched(Content content){
+        if(!(content instanceof UnlockableContent u)) return;
+
+        boolean was = u.unlockedNowHost();
+        state.rules.researched.add(u);
+
+        if(!was){
+            Events.fire(new UnlockEvent(u));
+        }
+    }
+
+    @Override
+    public void dispose(){
+        //save the settings before quitting
+        if(netServer != null){
+            netServer.admins.forceSave();
+        }
+        Core.settings.manualSave();
+    }
+
+    protected void updateEntities(){
+        PerfCounter.entityUpdate.begin();
+
+        PerfCounter.entityMisc.begin();
+        Groups.updatePooling();
+        Groups.bullet.updatePhysics();
+        Groups.unit.updatePhysics();
+        Groups.all.update();
+        PerfCounter.entityMisc.end();
+
+        PerfCounter.unitUpdate.begin();
+        Groups.unit.update();
+        PerfCounter.unitUpdate.end();
+
+        PerfCounter.powerUpdate.begin();
+        if(!state.isEditor()) Groups.powerGraph.update();
+        PerfCounter.powerUpdate.end();
+
+        PerfCounter.buildingUpdate.begin();
+        if(!state.isEditor()) Groups.build.update();
+        PerfCounter.buildingUpdate.end();
+
+        PerfCounter.bulletUpdate.begin();
+        Groups.bullet.update();
+
+        Groups.bullet.collide();
+        PerfCounter.bulletUpdate.end();
+
+        PerfCounter.entityUpdate.end();
+    }
+
+    @Override
+    public void update(){
+        PerfCounter.frame.end();
+        PerfCounter.frame.begin();
+
+        PerfCounter.stateUpdate.begin();
+
+        Events.fire(Trigger.update);
+        universe.updateGlobal();
+
+        if(Core.settings.modified() && !state.isPlaying()){
+            netServer.admins.forceSave();
+            Core.settings.forceSave();
+        }
+
+        boolean runStateCheck = !net.client() && !world.isInvalidMap() && !state.isEditor() && state.rules.canGameOver;
+
+        if(state.isGame()){
+            if(!net.client()){
+                state.enemies = Groups.unit.count(u -> u.team() == state.rules.waveTeam && u.isEnemy());
+            }
+
+            if(!state.isPaused()){
+                Events.fire(Trigger.beforeGameUpdate);
+
+                float delta = Core.graphics.getDeltaTime();
+                state.tick += Float.isNaN(delta) || Float.isInfinite(delta) ? 0f : delta * 60f;
+                state.updateId ++;
+                state.teams.updateTeamStats();
+                MapPreviewLoader.checkPreviews();
+
+                if(state.rules.fog){
+                    fogControl.update();
+                }
+
+                if(state.isCampaign()){
+                    state.rules.sector.info.update();
+                }
+
+                if(state.isCampaign()){
+                    universe.update();
+                }
+                Time.update();
+
+                logicVars.update();
+
+                //weather is serverside
+                if(!net.client() && !state.isEditor()){
+                    updateWeather();
+
+                    for(TeamData data : state.teams.getActive()){
+                        var rules = data.team.rules();
+                        if(rules.fillItems && data.cores.size > 0){
+                            var core = data.cores.first();
+                            content.items().each(i -> {
+                                if(i.isOnPlanet(Vars.state.getPlanet()) && !i.isHidden()){
+                                    core.items.set(i, core.getMaximumAccepted(i));
+                                }
+                            });
+                        }
+                        //does not work on PvP so built-in attack maps can have it on by default without issues
+                        if(rules.buildAi && !state.rules.pvp){
+                            if(data.buildAi == null) data.buildAi = new BaseBuilderAI(data);
+                            data.buildAi.update();
+                        }
+
+                        if(rules.rtsAi){
+                            if(data.rtsAi == null) data.rtsAi = new RtsAI(data);
+                            data.rtsAi.update();
+                        }
+
+                        //spawn units for prebuild AI cores
+                        if(rules.prebuildAi && !state.isEditor()){
+                            for(var core : data.cores){
+                                var units = data.getUnits(((CoreBlock)core.block).unitType);
+                                if(units == null || !units.contains(u -> u.flag == core.pos())){
+                                    Unit unit = ((CoreBlock)core.block).unitType.spawn(core, data.team);
+                                    unit.flag = core.pos();
+                                    unit.add();
+                                    Units.notifyUnitSpawn(unit);
+                                    Fx.spawn.at(unit);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if(!state.isEditor()){
+                    state.rules.objectives.update();
+                }
+
+                if(state.rules.waves && state.rules.waveTimer && !state.gameOver){
+                    if(!isWaitingWave()){
+                        state.wavetime = Math.max(state.wavetime - Time.delta, 0);
+                    }
+                }
+
+                if(!net.client() && state.wavetime <= 0 && state.rules.waves){
+                    runWave();
+                }
+
+                //apply weather attributes
+                state.envAttrs.clear();
+                state.envAttrs.add(state.rules.attributes);
+                Groups.weather.each(w -> state.envAttrs.add(w.weather.attrs, w.opacity));
+
+                updateEntities();
+
+                Events.fire(Trigger.afterGameUpdate);
+            }
+
+            if(runStateCheck){
+                checkGameState();
+            }
+        }else if(netServer.isWaitingForPlayers() && runStateCheck){
+            checkGameState();
+        }
+
+        PerfCounter.stateUpdate.end(PerfCounter.entityUpdate.latestValueNs());
+    }
+
+    /** @return whether the wave timer is paused due to enemies */
+    public boolean isWaitingWave(){
+        return (state.rules.waitEnemies || (state.wave >= state.rules.winWave && state.rules.winWave > 0)) && state.enemies > 0;
+    }
+}

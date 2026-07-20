@@ -1,0 +1,766 @@
+package mindustry.content;
+
+import arc.struct.*;
+import mindustry.game.Objectives.*;
+import mindustry.type.*;
+
+import static mindustry.content.Blocks.*;
+import static mindustry.content.SectorPresets.*;
+import static mindustry.content.TechTree.*;
+import static mindustry.content.UnitTypes.*;
+
+public class SerpuloTechTree{
+
+    public static void load(){
+        Planets.serpulo.techTree = nodeRoot("serpulo", coreShard, () -> {
+
+            node(conveyor, () -> {
+                node(junction, () -> {
+                    node(router, () -> {
+                        node(advancedLaunchPad, Seq.with(new SectorComplete(extractionOutpost)), () -> {
+                            node(landingPad, () -> {
+                                node(interplanetaryAccelerator, Seq.with(new SectorComplete(planetaryTerminal)), () -> {
+
+                                });
+                            });
+                        });
+
+                        node(distributor);
+                        node(sorter, () -> {
+                            node(invertedSorter);
+                            node(overflowGate, () -> {
+                                node(underflowGate);
+                            });
+                        });
+                        node(container, Seq.with(new SectorComplete(biomassFacility)), () -> {
+                            node(unloader);
+                            node(vault, Seq.with(new SectorComplete(stainedMountains)), () -> {
+
+                            });
+                        });
+
+                        node(itemBridge, () -> {
+                            node(titaniumConveyor, Seq.with(new SectorComplete(crateredBattleground)), () -> {
+                                node(massDriver, Seq.with(new SectorComplete(tarFields)), () -> {
+                                    node(phaseConveyor, () -> {
+
+                                    });
+                                });
+
+                                node(payloadConveyor, () -> {
+                                    node(payloadRouter, () -> {
+
+                                    });
+                                });
+
+                                node(plastaniumConveyor, () -> {
+                                    node(armoredConveyor, () -> {
+
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+
+            node(coreFoundation, () -> {
+                node(coreNucleus, () -> {
+
+                });
+            });
+
+            node(mechanicalDrill, () -> {
+                node(mechanicalPump, () -> {
+                    node(conduit, () -> {
+                        node(liquidJunction, () -> {
+                            node(liquidRouter, () -> {
+                                node(liquidContainer, () -> {
+                                    node(liquidTank);
+                                });
+
+                                node(bridgeConduit);
+
+                                node(pulseConduit, Seq.with(new SectorComplete(windsweptIslands)), () -> {
+                                    node(phaseConduit, () -> {
+
+                                    });
+
+                                    node(platedConduit, () -> {
+
+                                    });
+
+                                    node(rotaryPump, () -> {
+                                        node(impulsePump, () -> {
+
+                                        });
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+
+                node(graphitePress, () -> {
+                    node(pneumaticDrill, Seq.with(new SectorComplete(frozenForest)), () -> {
+                        node(cultivator, Seq.with(new SectorComplete(biomassFacility)), () -> {
+
+                        });
+
+                        node(laserDrill, () -> {
+                            node(blastDrill, Seq.with(new SectorComplete(nuclearComplex)), () -> {
+
+                            });
+
+                            node(waterExtractor, Seq.with(new SectorComplete(saltFlats)), () -> {
+                                node(oilExtractor, () -> {
+
+                                });
+                            });
+                        });
+                    });
+
+                    node(pyratiteMixer, Seq.with(new SectorComplete(crateredBattleground)), () -> {
+                        node(blastMixer, Seq.with(new SectorComplete(facility32m)), () -> {
+
+                        });
+                    });
+
+                    node(siliconSmelter, Seq.with(new SectorComplete(frozenForest)), () -> {
+
+                        node(sporePress, () -> {
+                            node(coalCentrifuge, () -> {
+                                node(multiPress, () -> {
+                                    node(siliconCrucible, () -> {
+
+                                    });
+                                });
+                            });
+
+                            node(plastaniumCompressor, Seq.with(new SectorComplete(windsweptIslands)), () -> {
+                                node(phaseWeaver, Seq.with(new SectorComplete(impact0078)), () -> {
+
+                                });
+                            });
+                        });
+
+                        node(kiln, Seq.with(new OnSector(crateredBattleground)), () -> {
+                            node(pulverizer, () -> {
+                                node(incinerator, () -> {
+                                    node(melter, () -> {
+                                        node(surgeSmelter, Seq.with(new SectorComplete(coastline)), () -> {
+
+                                        });
+
+                                        node(separator, () -> {
+                                            node(disassembler, () -> {
+
+                                            });
+                                        });
+
+                                        node(cryofluidMixer, () -> {
+
+                                        });
+                                    });
+                                });
+                            });
+                        });
+
+                        node(microProcessor, () -> {
+                            node(switchBlock, () -> {
+                                node(message, () -> {
+                                    node(logicDisplay, () -> {
+                                        node(largeLogicDisplay, () -> {
+
+                                        });
+
+                                        node(tileLogicDisplay, () -> {
+
+                                        });
+                                    });
+
+                                    node(memoryCell, () -> {
+                                        node(memoryBank, () -> {
+
+                                        });
+                                    });
+                                });
+
+                                node(logicProcessor, () -> {
+                                    node(hyperProcessor, () -> {
+
+                                    });
+                                });
+                            });
+                        });
+
+                        node(illuminator, () -> {
+
+                        });
+                    });
+                });
+
+
+                node(combustionGenerator, Seq.with(new Research(Items.coal)), () -> {
+                    node(powerNode, () -> {
+                        node(powerNodeLarge, () -> {
+                            node(diode, () -> {
+                                node(surgeTower, () -> {
+
+                                });
+                            });
+                        });
+
+                        node(battery, () -> {
+                            node(batteryLarge, () -> {
+
+                            });
+                        });
+
+                        node(mender, () -> {
+                            node(mendProjector, () -> {
+                                node(forceProjector, Seq.with(new SectorComplete(impact0078)), () -> {
+                                    node(overdriveProjector, Seq.with(new SectorComplete(impact0078)), () -> {
+                                        node(overdriveDome, Seq.with(new SectorComplete(desolateRift)), () -> {
+
+                                        });
+                                    });
+                                });
+
+                                node(repairPoint, () -> {
+                                    node(repairTurret, () -> {
+
+                                    });
+                                });
+                            });
+                        });
+
+                        node(steamGenerator, Seq.with(new SectorComplete(crateredBattleground)), () -> {
+                            node(thermalGenerator, () -> {
+                                node(differentialGenerator, () -> {
+                                    node(thoriumReactor, Seq.with(new Research(Liquids.cryofluid), new OnSector(nuclearComplex)), () -> {
+                                        node(impactReactor, () -> {
+
+                                        });
+
+                                        node(rtgGenerator, () -> {
+
+                                        });
+                                    });
+                                });
+                            });
+                        });
+
+                        node(solarPanel, () -> {
+                            node(largeSolarPanel, () -> {
+
+                            });
+                        });
+                    });
+                });
+            });
+
+            node(duo, () -> {
+                node(copperWall, () -> {
+                    node(copperWallLarge, () -> {
+                        node(scrapWall, () -> {
+                            node(scrapWallLarge, () -> {
+                                node(scrapWallHuge, () -> {
+                                    node(scrapWallGigantic);
+                                });
+                            });
+                        });
+
+                        node(titaniumWall, () -> {
+                            node(titaniumWallLarge);
+
+                            node(door, () -> {
+                                node(doorLarge);
+                            });
+
+                            node(plastaniumWall, () -> {
+                                node(plastaniumWallLarge, () -> {
+
+                                });
+                            });
+                            node(thoriumWall, () -> {
+                                node(thoriumWallLarge);
+                                node(surgeWall, () -> {
+                                    node(surgeWallLarge);
+                                    node(phaseWall, () -> {
+                                        node(phaseWallLarge);
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+
+                node(scatter, () -> {
+                    node(hail, Seq.with(new SectorComplete(crateredBattleground)), () -> {
+                        node(salvo, () -> {
+                            node(swarmer, () -> {
+                                node(cyclone, () -> {
+                                    node(spectre, Seq.with(new SectorComplete(nuclearComplex)), () -> {
+
+                                    });
+                                });
+                            });
+
+                            node(ripple, () -> {
+                                node(fuse, () -> {
+
+                                });
+                            });
+                        });
+                    });
+                });
+
+                node(arc, Seq.with(new OnSector(frozenForest)), () -> {
+                    node(scorch, () -> {
+                        node(wave, () -> {
+                            node(parallax, () -> {
+                                node(segment, () -> {
+
+                                });
+                            });
+
+                            node(tsunami, Seq.with(new SectorComplete(navalFortress)), () -> {
+
+                            });
+                        });
+
+                        node(lancer, () -> {
+                            node(meltdown, () -> {
+                                node(foreshadow, () -> {
+
+                                });
+                            });
+
+                            node(shockMine, () -> {
+
+                            });
+                        });
+                    });
+                });
+            });
+
+            node(groundFactory, () -> {
+
+                node(dagger, () -> {
+                    node(mace, () -> {
+                        node(fortress, () -> {
+                            node(scepter, () -> {
+                                node(reign, Seq.with(new SectorComplete(desolateRift)), () -> {
+
+                                });
+                            });
+                        });
+                    });
+
+                    node(nova, Seq.with(new SectorComplete(fungalPass)), () -> {
+                        node(pulsar, () -> {
+                            node(quasar, () -> {
+                                node(vela, () -> {
+                                    node(corvus, () -> {
+
+                                    });
+                                });
+                            });
+                        });
+                    });
+
+                    //override research requirements to have graphite, not coal
+                    node(crawler, ItemStack.with(Items.silicon, 400, Items.graphite, 400), () -> {
+                        node(atrax, () -> {
+                            node(spiroct, () -> {
+                                node(arkyid, () -> {
+                                    node(toxopid, Seq.with(new SectorComplete(mycelialBastion)), () -> {
+
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+
+                node(airFactory, () -> {
+                    node(flare, () -> {
+                        node(horizon, () -> {
+                            node(zenith, () -> {
+                                node(antumbra, () -> {
+                                    node(eclipse, () -> {
+
+                                    });
+                                });
+                            });
+                        });
+
+                        node(mono, () -> {
+                            node(poly, () -> {
+                                node(mega, () -> {
+                                    node(quad, () -> {
+                                        node(oct, () -> {
+
+                                        });
+                                    });
+                                });
+                            });
+                        });
+                    });
+
+                    node(navalFactory, Seq.with(new SectorComplete(ruinousShores)), () -> {
+                        node(risso, () -> {
+                            node(minke, () -> {
+                                node(bryde, () -> {
+                                    node(sei, () -> {
+                                        node(omura, Seq.with(new SectorComplete(littoralShipyard)), () -> {
+
+                                        });
+                                    });
+                                });
+                            });
+
+                            node(retusa, Seq.with(new SectorComplete(windsweptIslands)), () -> {
+                                node(oxynoe, Seq.with(new SectorComplete(coastline)), () -> {
+                                    node(cyerce, Seq.with(new SectorComplete(perilousHarbor)), () -> {
+                                        node(aegires, () -> {
+                                            node(navanax, Seq.with(new SectorComplete(navalFortress)), () -> {
+
+                                            });
+                                        });
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+
+                node(additiveReconstructor, Seq.with(new SectorComplete(fungalPass)), () -> {
+                    node(multiplicativeReconstructor, Seq.with(new SectorComplete(frontier)), () -> {
+                        node(exponentialReconstructor, Seq.with(new SectorComplete(overgrowth)), () -> {
+                            node(tetrativeReconstructor, Seq.with(new SectorComplete(mycelialBastion)), () -> {
+
+                            });
+                        });
+                    });
+                });
+            });
+
+            node(groundZero, () -> {
+                node(frozenForest, Seq.with(
+                new SectorComplete(groundZero),
+                new Research(junction),
+                new Research(router)
+                ), () -> {
+                    node(crateredBattleground, Seq.with(
+                    new SectorComplete(frozenForest),
+                    new Research(mender),
+                    new Research(combustionGenerator)
+                    ), () -> {
+                        node(ruinousShores, Seq.with(
+                        new SectorComplete(crateredBattleground),
+                        new Research(graphitePress),
+                        new Research(kiln),
+                        new Research(mechanicalPump)
+                        ), () -> {
+                            node(windsweptIslands, Seq.with(
+                            new SectorComplete(ruinousShores),
+                            new Research(pneumaticDrill),
+                            new Research(hail),
+                            new Research(siliconSmelter),
+                            new Research(steamGenerator)
+                            ), () -> {
+                                node(saltFlats, Seq.with(
+                                new SectorComplete(windsweptIslands),
+                                new SectorComplete(fungalPass),
+                                new SectorComplete(frontier),
+                                new Research(groundFactory),
+                                new Research(additiveReconstructor),
+                                new Research(airFactory),
+                                new Research(door)
+                                ), () -> {
+                                    node(tarFields, Seq.with(
+                                    new SectorComplete(saltFlats),
+                                    new Research(coalCentrifuge),
+                                    new Research(conduit),
+                                    new Research(wave)
+                                    ), () -> {
+                                        node(impact0078, Seq.with(
+                                        new SectorComplete(tarFields),
+                                        new Research(Items.thorium),
+                                        new Research(lancer),
+                                        new Research(salvo),
+                                        new Research(coreFoundation)
+                                        ), () -> {
+                                            node(desolateRift, Seq.with(
+                                            new SectorComplete(impact0078),
+                                            new Research(thermalGenerator),
+                                            new Research(thoriumReactor),
+                                            new Research(coreNucleus)
+                                            ), () -> {
+                                                node(littoralShipyard, Seq.with(
+                                                new SectorComplete(desolateRift),
+                                                new SectorComplete(navalFortress),
+                                                new Research(risso),
+                                                new Research(minke),
+                                                new Research(bryde),
+                                                new Research(sei),
+                                                new Research(spectre),
+                                                new Research(additiveReconstructor),
+                                                new Research(exponentialReconstructor)
+                                                ), () -> {
+                                                    node(planetaryTerminal, Seq.with(
+                                                    new SectorComplete(nuclearComplex),
+                                                    new SectorComplete(extractionOutpost),
+                                                    new SectorComplete(mycelialBastion),
+                                                    new SectorComplete(littoralShipyard),
+                                                    new Research(omura),
+                                                    new Research(advancedLaunchPad),
+                                                    new Research(massDriver),
+                                                    new Research(impactReactor),
+                                                    new Research(tetrativeReconstructor)
+                                                    ), () -> {
+
+                                                    });
+                                                });
+                                            });
+                                        });
+                                    });
+
+                                    node(coastline, Seq.with(
+                                    new SectorComplete(tarFields),
+                                    new SectorComplete(saltFlats),
+                                    new Research(navalFactory),
+                                    new Research(payloadConveyor)
+                                    ), () -> {
+
+                                        node(testingGrounds, Seq.with(
+                                        new SectorComplete(coastline),
+                                        new Research(cryofluidMixer),
+                                        new Research(Liquids.cryofluid),
+                                        new Research(waterExtractor),
+                                        new Research(ripple)
+                                        ), () -> {
+
+                                        });
+
+                                        node(navalFortress, Seq.with(
+                                        new SectorComplete(coastline),
+                                        new SectorComplete(extractionOutpost),
+                                        new Research(coreNucleus),
+                                        new Research(massDriver),
+                                        new Research(oxynoe),
+                                        new Research(minke),
+                                        new Research(bryde),
+                                        new Research(cyclone),
+                                        new Research(ripple)
+                                        ), () -> {
+                                            node(sunkenPier, Seq.with(
+                                            new SectorComplete(navalFortress),
+                                            new SectorComplete(coastline),
+                                            new Research(multiplicativeReconstructor)
+                                            ), () -> {
+
+                                            });
+
+                                            node(weatheredChannels, Seq.with(
+                                            new SectorComplete(impact0078),
+                                            new SectorComplete(navalFortress),
+                                            new Research(bryde),
+                                            new Research(surgeSmelter),
+                                            new Research(overdriveProjector)
+                                            ), () -> {
+                                            });
+                                        });
+                                    });
+                                });
+                            });
+                        });
+
+                        node(biomassFacility, Seq.with(
+                        new SectorComplete(crateredBattleground),
+                        new Research(powerNode),
+                        new Research(steamGenerator),
+                        new Research(scatter),
+                        new Research(graphitePress)
+                        ), () -> {
+
+                            node(stainedMountains, Seq.with(
+                            new SectorComplete(biomassFacility),
+                            new Research(pneumaticDrill),
+                            new Research(siliconSmelter)
+                            ), () -> {
+
+                                node(facility32m, Seq.with(
+                                new Research(plastaniumCompressor),
+                                new Research(lancer),
+                                new Research(salvo),
+                                new SectorComplete(stainedMountains),
+                                new SectorComplete(windsweptIslands)
+                                ), () -> {
+
+                                });
+
+                                node(infestedCanyons, Seq.with(
+                                new SectorComplete(fungalPass),
+                                new SectorComplete(frontier),
+                                new Research(navalFactory),
+                                new Research(risso),
+                                new Research(minke),
+                                new Research(additiveReconstructor)
+                                ), () -> {
+                                    node(nuclearComplex, Seq.with(
+                                    new SectorComplete(infestedCanyons),
+                                    new Research(thermalGenerator),
+                                    new Research(laserDrill),
+                                    new Research(Items.plastanium),
+                                    new Research(swarmer)
+                                    ), () -> {
+
+                                    });
+
+                                    node(taintedWoods, Seq.with(
+                                    new SectorComplete(infestedCanyons),
+                                    new Research(Items.sporePod),
+                                    new Research(Items.plastanium),
+                                    new Research(wave)
+                                    ), () -> {
+
+                                    });
+                                });
+                            });
+
+                            node(fungalPass, Seq.with(
+                            new Research(groundFactory),
+                            new Research(dagger)
+                            ), () -> {
+                                node(frontier, Seq.with(
+                                new SectorComplete(biomassFacility),
+                                new SectorComplete(fungalPass),
+                                new Research(groundFactory),
+                                new Research(airFactory),
+                                new Research(additiveReconstructor),
+                                new Research(mace),
+                                new Research(mono)
+                                ), () -> {
+                                    node(perilousHarbor, Seq.with(
+                                    new SectorComplete(biomassFacility),
+                                    new SectorComplete(frontier),
+                                    new Research(navalFactory),
+                                    new Research(risso),
+                                    new Research(retusa),
+                                    new Research(steamGenerator),
+                                    new Research(cultivator),
+                                    new Research(coalCentrifuge)
+                                    ), () -> {
+
+                                        node(extractionOutpost, Seq.with(
+                                        new SectorComplete(windsweptIslands),
+                                        new SectorComplete(perilousHarbor),
+                                        new SectorComplete(facility32m),
+
+                                        new Research(multiplicativeReconstructor),
+                                        new Research(risso),
+                                        new Research(minke),
+                                        new Research(fortress)
+                                        ), () -> {
+                                            node(atolls, Seq.with(
+                                            new SectorComplete(extractionOutpost),
+                                            new Research(poly),
+                                            new Research(mega)
+                                            ), () -> {
+
+                                            });
+                                        });
+                                    });
+
+                                    node(overgrowth, Seq.with(
+                                    new SectorComplete(frontier),
+                                    new SectorComplete(windsweptIslands),
+                                    new Research(multiplicativeReconstructor),
+                                    new Research(fortress),
+                                    new Research(ripple),
+                                    new Research(salvo),
+                                    new Research(cultivator),
+                                    new Research(sporePress)
+                                    ), () -> {
+                                        node(mycelialBastion, Seq.with(
+                                        new Research(atrax),
+                                        new Research(spiroct),
+                                        new Research(arkyid),
+                                        new Research(multiplicativeReconstructor),
+                                        new Research(exponentialReconstructor)
+                                        ), () -> {
+
+                                        });
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+
+            nodeProduce(Items.copper, () -> {
+                nodeProduce(Liquids.water, () -> {
+
+                });
+
+                nodeProduce(Items.lead, () -> {
+                    nodeProduce(Items.titanium, () -> {
+                        nodeProduce(Liquids.cryofluid, () -> {
+
+                        });
+
+                        nodeProduce(Items.thorium, () -> {
+                            nodeProduce(Items.surgeAlloy, () -> {
+
+                            });
+
+                            nodeProduce(Items.phaseFabric, () -> {
+
+                            });
+                        });
+                    });
+
+                    nodeProduce(Items.metaglass, () -> {
+
+                    });
+                });
+
+                nodeProduce(Items.sand, () -> {
+                    nodeProduce(Items.scrap, () -> {
+                        nodeProduce(Liquids.slag, () -> {
+
+                        });
+                    });
+
+                    nodeProduce(Items.coal, () -> {
+                        nodeProduce(Items.graphite, () -> {
+                            nodeProduce(Items.silicon, () -> {
+
+                            });
+                        });
+
+                        nodeProduce(Items.pyratite, () -> {
+                            nodeProduce(Items.blastCompound, () -> {
+
+                            });
+                        });
+
+                        nodeProduce(Items.sporePod, () -> {
+
+                        });
+
+                        nodeProduce(Liquids.oil, () -> {
+                            nodeProduce(Items.plastanium, () -> {
+
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    }
+}
