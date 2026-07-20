@@ -2,6 +2,8 @@
 
 本目录提供 YZF 服务端扩展 API 的文档入口。API 的权威定义在源码中，并由运行时能力注册表生成机器可读清单；本文档直接链接到实现，避免手写接口列表与代码脱节。
 
+完整规范由 **月月岛科技 · YUEYUEDAO TECH** 维护，见 [`API规范/README.md`](API规范/README.md)（[组织主页](https://github.com/MonthZifang/YUEYUEDAO-TECH)）。其中包含 API 全量开发参考、外部访问安全、远程接口与服务端回放、配置目录架构。
+
 ## 运行时能力清单
 
 [`YZFOpenApiRegistry`](../server/src/mindustry/yzf/YZFOpenApiRegistry.java) 提供以下 JSON 输出：

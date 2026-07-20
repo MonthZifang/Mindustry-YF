@@ -46,7 +46,7 @@
 
 ## API 与开发文档
 
-完整 API 入口见 [`docs/API.md`](docs/API.md)。
+完整 API 入口见 [`docs/API.md`](docs/API.md)。详细开发规范见 [`docs/API规范/README.md`](docs/API规范/README.md)，由 **月月岛科技 · YUEYUEDAO TECH** 维护（[组织主页](https://github.com/MonthZifang/YUEYUEDAO-TECH)）。
 
 - [API 能力注册表](server/src/mindustry/yzf/YZFOpenApiRegistry.java)：运行时生成可查询的能力清单，按只读/写入权限区分。
 - [JavaScript API 桥接](server/src/mindustry/yzf/YZFJsModuleBridge.java)：`yzf.*` 脚本 API 实现入口。
@@ -54,6 +54,7 @@
 - [服务端 YZF 配置](server/config/yzf/)：兼容层、数据库注册和远程数据库模板。
 - [运行时 SDK](runtime-sdk/) 与 [Kotlin 库说明](runtime-sdk/kotlin-libs/README.txt)。
 - [Kotlin 插件模板](server/kotlin-plugin-template/README.md)：插件 JAR 构建和模块元数据示例。
+- [API 规范目录](docs/API规范/README.md)：完整 API、外部访问安全、远程接口/回放与配置目录规范。
 
 ## 服务端扩展开发
 
