@@ -49,6 +49,11 @@ buildSrc/
 *.gif
 /tests/out
 
+# Local AI chat records
+**/欲眠/
+**/*AI聊天记录*
+**/*AI*聊天记录*
+
 /core/assets/basepartnames
 version.properties
 
