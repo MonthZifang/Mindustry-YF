@@ -1,80 +1,78 @@
-![Logo](core/assets-raw/sprites/ui/logo.png)
+# Mindustry YF Framework
 
-[![Build Status](https://github.com/Anuken/Mindustry/workflows/Tests/badge.svg?event=push)](https://github.com/Anuken/Mindustry/actions)
-[![Discord](https://img.shields.io/discord/391020510269669376.svg?logo=discord&logoColor=white&logoWidth=20&labelColor=7289DA&label=Discord&color=17cf48)](https://discord.gg/mindustry)  
+基于 Mindustry 159.2 的服务端扩展框架。项目保留原版游戏多端构建能力，并在 `server` 模块中提供 YZF 模块系统、脚本运行时、服务连接、数据存储、权限控制和可发现的 API 能力清单。
 
-The automation tower defense RTS, written in Java.
+> 本仓库仅包含源码与示例配置。构建产物、服务器运行数据、日志以及本地 AI 聊天记录均不会提交。
 
-_[Trello Board](https://trello.com/b/aE2tcUwF/mindustry-40-plans)_  
-_[Wiki](https://mindustrygame.github.io/wiki)_  
-_[Javadoc](https://mindustrygame.github.io/docs/)_ 
+## 功能概览
 
-## Contributing
+- 基于 Java 17 与 Gradle 的 Mindustry 159.2 工程，支持桌面端、服务端、Android、iOS、测试及开发工具。
+- YZF 服务端框架支持 Java、JavaScript 和 Kotlin 扩展运行时。
+- 提供模块发现与热重载、命令、事件、权限、审计日志、指标、数据库、缓存、远程 HTTP 与 WebSocket 能力。
+- 运行时 API 能力清单区分只读与写入接口，方便模块按最小权限集成。
 
-See [CONTRIBUTING](CONTRIBUTING.md) for general code style and PR guidelines.
+## 快速开始
 
-If you are a first-time contributor looking for features to implement or bugs to fix, see the issues tagged with 'candidate' [in the Mindustry-Suggestions repostiory](https://github.com/Anuken/Mindustry-Suggestions/issues?q=is%3Aissue%20state%3Aopen%20label%3Acandidate).
+### 环境要求
 
-## Building
+- JDK 17 或更高版本（推荐 JDK 17）。
+- Windows 使用 `gradlew.bat`；macOS/Linux 使用 `./gradlew`。
+- Android 构建额外需要 Android SDK，并设置 `ANDROID_HOME`。
 
-Bleeding-edge builds are generated automatically for every commit. You can see them [here](https://github.com/Anuken/MindustryBuilds/releases).
+| 目标 | Windows | macOS / Linux |
+| --- | --- | --- |
+| 启动桌面端 | `gradlew.bat desktop:run` | `./gradlew desktop:run` |
+| 构建桌面端 | `gradlew.bat desktop:dist` | `./gradlew desktop:dist` |
+| 启动服务端 | `gradlew.bat server:run` | `./gradlew server:run` |
+| 构建服务端 JAR | `gradlew.bat server:dist` | `./gradlew server:dist` |
+| 打包服务端部署包 | `gradlew.bat server:deploy` | `./gradlew server:deploy` |
+| 运行测试 | `gradlew.bat tests:test` | `./gradlew tests:test` |
+| 资源打包 | `gradlew.bat tools:pack` | `./gradlew tools:pack` |
 
-If you'd rather compile on your own, follow these instructions.
-First, make sure you have [JDK 17](https://adoptium.net/temurin/releases/?os=any&arch=any&version=17) installed. **Other JDK versions will not work.** Open a terminal in the Mindustry directory and run the following commands:
+服务端构建完成后的 JAR 位于 `server/build/libs/server-release.jar`。该目录是本地构建输出，已被 Git 忽略。
 
-### Windows
+## 项目结构
 
-_Running:_ `gradlew desktop:run`  
-_Building:_ `gradlew desktop:dist`  
-_Sprite Packing:_ `gradlew tools:pack`
+| 路径 | 说明 |
+| --- | --- |
+| [`core`](core/) | 游戏核心逻辑、资源、网络与 UI。 |
+| [`server`](server/) | 专用服务器与 YZF 扩展框架。 |
+| [`server/src/mindustry/yzf`](server/src/mindustry/yzf/) | YZF 主要 Java API、模块、服务与脚本桥接实现。 |
+| [`server/config`](server/config/) | 可随源码分发的服务端与 YZF 示例配置。 |
+| [`runtime-sdk`](runtime-sdk/) | 服务端运行时 SDK。 |
+| [`server/kotlin-plugin-template`](server/kotlin-plugin-template/) | Kotlin 插件开发与打包模板。 |
+| [`desktop`](desktop/) / [`android`](android/) / [`ios`](ios/) | 各客户端平台模块。 |
+| [`annotations`](annotations/) / [`tools`](tools/) / [`tests`](tests/) | 注解生成、开发工具与自动化测试。 |
 
-### Linux/Mac OS
+## API 与开发文档
 
-_Running:_ `./gradlew desktop:run`  
-_Building:_ `./gradlew desktop:dist`  
-_Sprite Packing:_ `./gradlew tools:pack`
+完整 API 入口见 [`docs/API.md`](docs/API.md)。
 
-### Server
+- [API 能力注册表](server/src/mindustry/yzf/YZFOpenApiRegistry.java)：运行时生成可查询的能力清单，按只读/写入权限区分。
+- [JavaScript API 桥接](server/src/mindustry/yzf/YZFJsModuleBridge.java)：`yzf.*` 脚本 API 实现入口。
+- [YZF 框架源码目录](server/src/mindustry/yzf/)：模块、事件、命令、服务、数据、权限与 WebSocket 核心接口。
+- [服务端 YZF 配置](server/config/yzf/)：兼容层、数据库注册和远程数据库模板。
+- [运行时 SDK](runtime-sdk/) 与 [Kotlin 库说明](runtime-sdk/kotlin-libs/README.txt)。
+- [Kotlin 插件模板](server/kotlin-plugin-template/README.md)：插件 JAR 构建和模块元数据示例。
 
-Server builds are bundled with each released build (in Releases). If you'd rather compile on your own, replace 'desktop' with 'server', e.g. `gradlew server:dist`.
+## 服务端扩展开发
 
-### Android
+服务端入口类为 `mindustry.server.ServerLauncher`，YZF 在服务端启动时装配。
 
-1. Install the Android SDK [here.](https://developer.android.com/studio#command-tools) Make sure you're downloading the "Command line tools only", as Android Studio is not required.
-2. In the unzipped Android SDK folder, find the cmdline-tools directory. Then create a folder inside of it called `latest` and put all of its contents into the newly created folder.
-3. In the same directory run the command `sdkmanager --licenses` (or `./sdkmanager --licenses` if on linux/mac)
-4. Set the `ANDROID_HOME` environment variable to point to your unzipped Android SDK directory.
-5. Enable developer mode on your device/emulator. If you are on testing on a phone you can follow [these instructions](https://developer.android.com/studio/command-line/adb#Enabling), otherwise you need to google how to enable your emulator's developer mode specifically.
-6. Run `gradlew android:assembleDebug` (or `./gradlew` if on linux/mac). This will create an unsigned APK in `android/build/outputs/apk`.
+1. 从 [`server/config/yzf`](server/config/yzf/) 的配置和兼容示例开始。
+2. 通过 [API 文档](docs/API.md) 和能力清单确认当前运行时提供的接口。
+3. JavaScript 模块通过 `YZFJsModuleBridge` 暴露的 `yzf.*` 能力调用服务器功能。
+4. Kotlin 插件从 [模板](server/kotlin-plugin-template/) 构建 JAR，并按模板 README 的模块元数据安装。
+5. 外部 HTTP、WebSocket、数据库或对象存储应先配置相应权限与服务定义。
 
-To debug the application on a connected device/emulator, run `gradlew android:installDebug android:run`.
+## 配置与数据安全
 
-### Troubleshooting
+- `server/build/`（包含 `server/build/libs/`）是构建/运行目录，不会上传。
+- 名为 `欲眠` 的本地目录，以及名称包含“AI聊天记录”的文件会被忽略，避免隐私内容进入仓库。
+- 请勿把密钥、令牌、生产数据库密码或个人数据写入可提交的配置文件。
 
-#### Permission Denied
+## 贡献
 
-If the terminal returns `Permission denied` or `Command not found` on Mac/Linux, run `chmod +x ./gradlew` before running `./gradlew`. *This is a one-time procedure.*
+提交规范和代码风格见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。问题说明参考 [`ISSUES.md`](ISSUES.md)，翻译说明见 [`TRANSLATING.md`](TRANSLATING.md)。
 
-#### Where is the `mindustry.gen` package?
-
-As the name implies, `mindustry.gen` is generated *at build time* based on other code. You will not find source code for this package in the repository, and it should not be edited by hand.
-
-The following is a non-exhaustive list of the "source" of generated code in `mindustry.gen`:
-
-- `Call`, `*Packet` classes: Generated from methods marked with `@Remote`.
-- All entity classes (`Unit`, `EffectState`, `Posc`, etc): Generated from component classes in the `mindustry.entities.comp` package, and combined using definitions in `mindustry.content.UnitTypes`.
-- `Sounds`, `Musics`, `Tex`, `Icon`, etc: Generated based on files in the respective asset folders.
-
----
-
-Gradle may take up to several minutes to download files. Be patient. <br>
-After building, the output .JAR file should be in `/desktop/build/libs/Mindustry.jar` for desktop builds, and in `/server/build/libs/server-release.jar` for server builds.
-
-## Feature Requests
-
-Post feature requests and feedback [here](https://github.com/Anuken/Mindustry-Suggestions/issues/new/choose).
-
-## Downloads
-
-| [![](https://static.itch.io/images/badge.svg)](https://anuke.itch.io/mindustry)    |    [![](https://play.google.com/intl/en_us/badges/images/generic/en-play-badge.png)](https://play.google.com/store/apps/details?id=io.anuke.mindustry)   |    [![](https://fdroid.gitlab.io/artwork/badge/get-it-on.png)](https://f-droid.org/packages/io.anuke.mindustry)	| [![](https://flathub.org/assets/badges/flathub-badge-en.svg)](https://flathub.org/apps/details/com.github.Anuken.Mindustry)  
-|---	|---	|---	|---	|
+Mindustry 资料：[Wiki](https://mindustrygame.github.io/wiki) · [上游 JavaDoc](https://mindustrygame.github.io/docs/) · [上游仓库](https://github.com/Anuken/Mindustry)
