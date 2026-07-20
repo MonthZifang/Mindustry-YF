@@ -1,3 +1,15 @@
+<div align="center">
+  <a href="https://github.com/MonthZifang/YUEYUEDAO-TECH">
+    <img src="docs/assets/yueyuedao-tech-logo.png" alt="月月岛科技 · YUEYUEDAO TECH" width="720" />
+  </a>
+
+  <p><strong>月月岛科技 · YUEYUEDAO TECH 维护</strong></p>
+
+  <p>
+    <a href="https://github.com/MonthZifang/YUEYUEDAO-TECH"><strong>查看月月岛科技详情</strong></a>
+  </p>
+</div>
+
 # Mindustry YF Framework
 
 基于 Mindustry 159.2 的服务端扩展框架。项目保留原版游戏多端构建能力，并在 `server` 模块中提供 YZF 模块系统、脚本运行时、服务连接、数据存储、权限控制和可发现的 API 能力清单。
