@@ -42,7 +42,10 @@
 | 资源打包 | `gradlew.bat tools:pack` | `./gradlew tools:pack` |
 
 服务端构建完成后的 JAR 位于 `server/build/libs/server-release.jar`。该目录是本地构建输出，已被 Git 忽略。
-
+## 强烈建议
+我们建议你安装前端管理面板以及它的依赖
+https://github.com/tomorrowsetout/YFM/tree/main/plugins/WEB%20YFUI 该前端管理面板可适用于更好的管理如玩家检测等等 
+https://github.com/tomorrowsetout/YFM/tree/main/plugins/WEB%20YFUI%20Adapter 请使用前端的依赖来作为基础如果其他服务器想使用该前端直接将依赖移植即可 请在依赖更换登录token或名称
 ## 项目结构
 
 | 路径 | 说明 |
