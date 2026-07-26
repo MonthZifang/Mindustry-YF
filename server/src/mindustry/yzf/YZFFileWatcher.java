@@ -178,6 +178,11 @@ public final class YZFFileWatcher{
     private boolean isIgnoredPath(Path path){
         if(path == null) return true;
 
+        // This is an automatically generated inspection aid, rewritten during
+        // bootstrap. It is not a loadable module script and must not reload all modules.
+        Path name = path.getFileName();
+        if(name != null && name.toString().equalsIgnoreCase("stable-api-debug.js")) return true;
+
         for(Path part : path.normalize()){
             String segment = part.toString().toLowerCase(Locale.ROOT);
             if(segment.equals("cache") || segment.equals("logs") || segment.equals("tmp") || segment.equals("temp") || segment.equals("node_modules")){

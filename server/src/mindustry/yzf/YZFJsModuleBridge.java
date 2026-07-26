@@ -367,6 +367,15 @@ public final class YZFJsModuleBridge{
         return YZFOpenApiRegistry.writeOnlyJson();
     }
 
+    /** Calls a configuration-backed stable API by its public id. */
+    public Object stableApi(String id){
+        return YZFStableApi.call(id);
+    }
+
+    public String stableApiManifest(){
+        return YZFStableApi.manifestJson();
+    }
+
     public String statusSnapshot(){
         return YZFStatusUi.statusJson();
     }
@@ -594,7 +603,7 @@ public final class YZFJsModuleBridge{
     }
 
     public int gameTps(){
-        return state.serverTps;
+        return mindustry.server.ServerLauncher.actualTps();
     }
 
     public String gameMap(){

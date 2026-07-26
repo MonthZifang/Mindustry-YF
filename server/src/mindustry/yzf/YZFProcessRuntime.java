@@ -521,8 +521,9 @@ public final class YZFProcessRuntime{
         server.put("description", Vars.state.isMenu() ? "offline" : "running");
         server.put("players", Groups.player.size());
         server.put("playersPeak", Groups.player.size());
-        server.put("tps", Vars.state.serverTps);
-        server.put("tpsAvg", Vars.state.serverTps);
+        server.put("tps", mindustry.server.ServerLauncher.actualTps());
+        server.put("tpsAvg", mindustry.server.ServerLauncher.actualTps());
+        server.put("tpsLimit", Vars.serverTps);
         server.put("memoryMb", (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024L / 1024L);
         server.put("memoryLimitMb", Runtime.getRuntime().maxMemory() / 1024L / 1024L);
         server.put("uptimeMs", ManagementFactory.getRuntimeMXBean().getUptime());

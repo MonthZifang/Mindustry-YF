@@ -182,7 +182,6 @@ public final class YZFEmbeddedRuntime{
             item.put("mainScript", state.definition.mainScript.absolutePath());
             item.put("metaFile", state.definition.metaFile.absolutePath());
             item.put("sourceBytes", state.definition.mainScript.file().length());
-            item.put("sourceText", YZFText.readTextSmart(state.definition.mainScript));
             item.put("memoryMin", state.definition.meta.memoryMin);
             item.put("memoryMax", state.definition.meta.memoryMax);
             item.put("memoryLimitEnforced", false);
@@ -190,6 +189,29 @@ public final class YZFEmbeddedRuntime{
             item.put("playerCommands", state.playerCommands.size);
             item.put("events", state.eventBindings.size);
             item.put("tasks", state.taskBindings.size);
+            item.put("serverCommandNames", state.serverCommands.toString(", "));
+            StringBuilder playerCommands = new StringBuilder();
+            for(YZFPlayerCommandBinding binding : state.playerCommands){
+                if(playerCommands.length() > 0) playerCommands.append(", ");
+                playerCommands.append(binding.name).append(binding.adminOnly ? " (admin)" : "");
+            }
+            StringBuilder events = new StringBuilder();
+            for(YZFEventBinding binding : state.eventBindings){
+                if(events.length() > 0) events.append(", ");
+                events.append(binding.eventName);
+            }
+            StringBuilder tasks = new StringBuilder();
+            for(YZFTaskBinding binding : state.taskBindings){
+                if(tasks.length() > 0) tasks.append(", ");
+                tasks.append(binding.id).append(" (").append(binding.kind).append(")");
+            }
+            item.put("playerCommandNames", playerCommands.toString());
+            item.put("eventNames", events.toString());
+            item.put("taskNames", tasks.toString());
+            ConcurrentHashMap<String, EmbeddedExport> exports = embeddedExports.get(state.definition.fullId());
+            item.put("exportedInterfaces", exports == null ? "" : String.join(", ", exports.keySet()));
+            item.put("calledModuleInterfaces", state.moduleCalls.toString(", "));
+            item.put("registeredPages", state.pages.toString(", "));
             result.add(item);
         }
         return result;
@@ -550,6 +572,8 @@ public final class YZFEmbeddedRuntime{
 
         StatusNamespace getStatus();
 
+        StableApiNamespace getStable();
+
         void uiRegisterPage(String pageId, String descriptorJson);
 
         boolean uiUnregisterPage(String pageId);
@@ -695,6 +719,17 @@ public final class YZFEmbeddedRuntime{
 
         public String ui(){
             return YZFStatusUi.uhdStatusUiJson();
+        }
+    }
+
+    /** Configuration-backed stable API available to every embedded Java module. */
+    public static final class StableApiNamespace{
+        public Object call(String id){
+            return YZFStableApi.call(id);
+        }
+
+        public String manifest(){
+            return YZFStableApi.manifestJson();
         }
     }
 
@@ -1080,7 +1115,15 @@ public final class YZFEmbeddedRuntime{
         }
     }
 
-    private final class WsNamespace{
+    /**
+     * Server-managed outbound WebSocket bridge for embedded Java modules.
+     *
+     * <p>This type is deliberately public because {@link EmbeddedModuleApi#getWs()}
+     * is part of the public embedded-module contract.  Keeping the return type
+     * private made that API impossible to call from a separately compiled Java
+     * module even though it was available to JavaScript modules.</p>
+     */
+    public final class WsNamespace{
         private final EmbeddedModuleState state;
 
         private WsNamespace(EmbeddedModuleState state){
@@ -1413,6 +1456,8 @@ public final class YZFEmbeddedRuntime{
         }
 
         public Object call(String targetModuleId, String fnName, Object... args){
+            String call = targetModuleId + "#" + fnName;
+            if(!state.moduleCalls.contains(call)) state.moduleCalls.add(call);
             ConcurrentHashMap<String, EmbeddedExport> exports = embeddedExports.get(targetModuleId);
             if(exports != null){
                 EmbeddedExport export = exports.get(fnName);
@@ -1631,6 +1676,7 @@ public final class YZFEmbeddedRuntime{
         public final RuntimeNamespace runtime;
         public final OpenApiNamespace openapi;
         public final StatusNamespace status;
+        public final StableApiNamespace stable;
         public final PlayerNamespace player;
         public final GameNamespace game;
         public final NetNamespace net;
@@ -1659,6 +1705,7 @@ public final class YZFEmbeddedRuntime{
             this.runtime = new RuntimeNamespace(state);
             this.openapi = new OpenApiNamespace();
             this.status = new StatusNamespace();
+            this.stable = new StableApiNamespace();
             this.player = new PlayerNamespace(helper);
             this.game = new GameNamespace(helper);
             this.net = new NetNamespace(helper);
@@ -1887,8 +1934,14 @@ public final class YZFEmbeddedRuntime{
         }
 
         @Override
+        public StableApiNamespace getStable(){
+            return stable;
+        }
+
+        @Override
         public void uiRegisterPage(String pageId, String descriptorJson){
             MindustryYZF.context().webUi.register(state.definition.fullId(), pageId, descriptorJson);
+            if(!state.pages.contains(pageId)) state.pages.add(pageId);
         }
 
         @Override
@@ -2309,6 +2362,8 @@ public final class YZFEmbeddedRuntime{
         final Seq<YZFPlayerCommandBinding> playerCommands = new Seq<>();
         final Seq<YZFEventBinding> eventBindings = new Seq<>();
         final Seq<YZFTaskBinding> taskBindings = new Seq<>();
+        final Seq<String> moduleCalls = new Seq<>();
+        final Seq<String> pages = new Seq<>();
         final Seq<Runnable> enableCallbacks = new Seq<>();
         final Seq<Runnable> disableCallbacks = new Seq<>();
         URLClassLoader classLoader;

@@ -558,6 +558,8 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
             "  warn: function(msg){ return __yzfBridge.warn(String(msg)); },\n" +
             "  err: function(msg){ return __yzfBridge.err(String(msg)); },\n" +
             "  evalFile: function(path){ return __yzfBridge.evalFile(String(path)); },\n" +
+            "  stableApi: function(id){ return __yzfBridge.stableApi(String(id)); },\n" +
+            "  stableApiManifest: function(){ return __yzfBridge.stableApiManifest(); },\n" +
             "  player: {\n" +
             "    kick: function(id, reason, duration){\n" +
             "      if(duration !== undefined) return __yzfBridge.playerKickDuration(Number(id), String(reason), Number(duration));\n" +

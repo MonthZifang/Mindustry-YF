@@ -181,6 +181,8 @@ public class Vars implements Loadable{
     public static float maxDeltaClient = 4f, maxDeltaServer = 4f;
     /** Configured server simulation/network tick rate. */
     public static volatile int serverTps = 60;
+    /** Latest measured headless server update rate. -1 means no sample is available yet. */
+    public static volatile int actualServerTps = -1;
     /** whether the graphical game client has loaded */
     public static boolean clientLoaded = false;
     /** whether the serpulo campaign sectors were remapped (older save) */

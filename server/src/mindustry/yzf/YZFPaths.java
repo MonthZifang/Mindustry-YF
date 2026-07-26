@@ -29,6 +29,8 @@ public final class YZFPaths{
     public final Fi terminalFile;
     public final Fi securityFile;
     public final Fi externalAccessFile;
+    public final Fi stableApiFile;
+    public final Fi stableApiDebugFile;
     public final Fi syncConfigFile;
     public final Fi runtimeConfigFile;
     public final Fi memoryRegionsConfigFile;
@@ -59,6 +61,8 @@ public final class YZFPaths{
         this.terminalFile = configDir.child("terminal.hjson");
         this.securityFile = configDir.child("security.hjson");
         this.externalAccessFile = configDir.child("external-access.hjson");
+        this.stableApiFile = configDir.child("stable-api.hjson");
+        this.stableApiDebugFile = configDir.child("stable-api-debug.js");
         this.syncConfigFile = configDir.child("sync.hjson");
         this.runtimeConfigFile = configDir.child("runtime.hjson");
         this.memoryRegionsConfigFile = configDir.child("memory-regions.hjson");

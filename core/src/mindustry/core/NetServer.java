@@ -1111,7 +1111,10 @@ public class NetServer implements ApplicationListener{
     }
 
     public void writeStateSnapshot() throws IOException{
-        byte tps = (byte)Math.max(1, Math.min(Vars.serverTps, 255));
+        // The client renders this field as the server TPS. Send the measured
+        // rate, not the configured cap. The network protocol stores it as a byte.
+        int measuredTps = Vars.actualServerTps > 0 ? Vars.actualServerTps : Vars.serverTps;
+        byte tps = (byte)Math.max(1, Math.min(measuredTps, 255));
         syncStream.reset();
         int activeTeams = (byte)state.teams.present.count(t -> t.cores.size > 0);
 

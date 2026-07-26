@@ -23,6 +23,7 @@ import static mindustry.server.ServerControl.*;
 public class ServerLauncher implements ApplicationListener{
     static String[] args;
     private static AdjustableHeadlessApplication application;
+    private static volatile int actualTps;
 
     public static void main(String[] args){
         try{
@@ -43,6 +44,28 @@ public class ServerLauncher implements ApplicationListener{
     /** Changes the maximum headless server loop frequency at runtime. */
     public static void setServerTps(int tps){
         if(application != null) application.setMaxTps(tps);
+    }
+
+    /** Actual headless application update rate measured over a one-second wall-clock window. */
+    public static int actualTps(){
+        return Vars.actualServerTps;
+    }
+
+    private static final class TpsMonitor implements ApplicationListener{
+        private long windowStart = System.nanoTime();
+        private int updates;
+
+        @Override
+        public void update(){
+            updates++;
+            long now = System.nanoTime();
+            long elapsed = now - windowStart;
+            if(elapsed < 1_000_000_000L) return;
+            actualTps = (int)Math.round(updates * 1_000_000_000d / elapsed);
+            Vars.actualServerTps = actualTps;
+            updates = 0;
+            windowStart = now;
+        }
     }
 
     private static final class AdjustableHeadlessApplication extends HeadlessApplication{
@@ -95,6 +118,7 @@ public class ServerLauncher implements ApplicationListener{
         Core.app.addListener(netServer = new NetServer());
         Core.app.addListener(new ServerControl(args));
         Core.app.addListener(new ApplicationListener(){public void update(){ asyncCore.end(); }});
+        Core.app.addListener(new TpsMonitor());
 
         mods.eachClass(Mod::init);
         MindustryYZF.bootstrap(args, ServerControl.instance);

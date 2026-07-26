@@ -31,7 +31,8 @@ public final class YZFStatusUi{
         root.put("runtimeMode", context == null ? "unknown" : context.runtime.mode());
         root.put("watcherRunning", context != null && context.watcher.running());
         root.put("serverOpen", !Vars.state.isMenu());
-        root.put("tps", Vars.state.serverTps);
+        root.put("tps", mindustry.server.ServerLauncher.actualTps());
+        root.put("tpsLimit", Vars.serverTps);
         root.put("players", Groups.player.size());
         root.put("units", Groups.unit.size());
         root.put("enemies", Vars.state.enemies);

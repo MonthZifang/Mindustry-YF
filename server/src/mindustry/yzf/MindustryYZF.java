@@ -68,12 +68,15 @@ public final class MindustryYZF{
         YZFErrorLog.configure(paths, context.runtimeConfig.errorLoggingEnabled, context.runtimeConfig.errorTerminalColors);
         YZFServerCommands.register(context);
         databaseRegistry.attachServiceRegistry(services.registry());
+        // The first load compiles Java modules into their cache directories.
+        // Start watchers only after it completes so those generated files cannot
+        // enqueue a second all-module reload during server startup.
+        runtime.reloadAll();
         if(context.runtimeConfig.fileWatcherEnabled){
             watcher.start();
             modHotReloadManager = new YZFModHotReloadManager(context);
             modHotReloadManager.start();
         }
-        runtime.reloadAll();
         resetHandler = event -> registry.scan();
         playerJoinHandler = event -> ensurePlayerComid(event.player);
         Events.on(ResetEvent.class, resetHandler);
@@ -256,6 +259,23 @@ public final class MindustryYZF{
                 "keyFile: \"\"\n"
             );
         }
+
+        if(!paths.stableApiFile.exists()){
+            paths.stableApiFile.writeString(
+                "# Stable API aliases for plugins and generated external debug scripts.\n"
+                + "# Only documented targets are accepted; unsupported entries are ignored.\n"
+                + "enabled: true\n"
+                + "interfaces: [\n"
+                + "  { id: \"server.actualTps\", target: \"server.actualTps\", description: \"Measured real TPS.\" }\n"
+                + "  { id: \"server.tpsLimit\", target: \"server.tpsLimit\", description: \"Configured TPS cap.\" }\n"
+                + "  { id: \"server.status\", target: \"server.status\", description: \"Server status JSON.\" }\n"
+                + "  { id: \"server.openApiManifest\", target: \"server.openApiManifest\", description: \"Open API manifest JSON.\" }\n"
+                + "  { id: \"server.openApiSummary\", target: \"server.openApiSummary\", description: \"Open API summary JSON.\" }\n"
+                + "  { id: \"server.playerCount\", target: \"server.playerCount\", description: \"Connected player count.\" }\n"
+                + "]\n"
+            );
+        }
+        YZFStableApi.load(paths);
 
         if(!paths.syncConfigFile.exists()){
             paths.syncConfigFile.writeString(defaultSyncConfig());
