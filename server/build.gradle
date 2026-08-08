@@ -42,12 +42,23 @@ tasks.register('debug', JavaExec){
     debug = true
 }
 
+tasks.register('yzfCoreSources', Zip){
+    archiveFileName = 'yzf-core-sources.zip'
+    destinationDirectory = file("$buildDir/yzf-core")
+    from 'src/mindustry/yzf'
+    into 'mindustry/yzf'
+}
+
 tasks.register('dist', Jar){
     dependsOn configurations.runtimeClasspath
+    dependsOn tasks.named('yzfCoreSources')
     from files(sourceSets.main.output.classesDirs)
     from files(sourceSets.main.output.resourcesDir)
     from{ configurations.runtimeClasspath.collect{ it.isDirectory() ? it : zipTree(it) } }
     from files(project.assetsDir)
+    from(tasks.named('yzfCoreSources')){
+        into 'yzf'
+    }
     exclude("bloomshaders/**")
     exclude("sprites/**")
     exclude("music/**")

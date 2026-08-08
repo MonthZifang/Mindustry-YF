@@ -20,7 +20,6 @@ import mindustry.game.EventType.*;
 import mindustry.game.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
-import mindustry.net.*;
 import mindustry.ui.*;
 import mindustry.world.*;
 
@@ -243,7 +242,7 @@ public class DesktopInput extends InputHandler{
         if(!scene.hasField() && !scene.hasDialog()){
             if(input.keyTap(Binding.debugHitboxes)) Core.settings.toggle("drawhitboxes");
 
-            if(input.keyTap(Binding.teleportCursor) && (state.rules.editor || state.rules.infiniteResources)){
+            if(input.keyTap(Binding.teleportCursor) && (state.rules.editor || state.rules.infiniteResources) && !net.client()){
                 if(player.dead()){
                     camera.position.set(input.mouseWorld());
                 }else{
@@ -437,9 +436,7 @@ public class DesktopInput extends InputHandler{
         }
 
         if(!player.dead() && !state.isPaused() && !scene.hasField() && !locked){
-            if(!YZFNetSync.noUpdatePlayerMovement()){
-                updateMovement(player.unit());
-            }
+            updateMovement(player.unit());
 
             if(Core.input.keyTap(Binding.respawn)){
                 controlledType = null;
@@ -469,7 +466,13 @@ public class DesktopInput extends InputHandler{
             }
         }
 
-        if(state.isMenu() || Core.scene.hasDialog()) return;
+        if(state.isMenu() || Core.scene.hasDialog()){
+            if(!Core.input.keyDown(Binding.select)) player.shooting = false;
+            if(mode == breaking && !Core.input.keyDown(Binding.breakBlock)) mode = none;
+            if(mode == placing && !Core.input.keyDown(Binding.select)) mode = none;
+
+            return;
+        }
 
         //zoom camera
         if((!Core.scene.hasScroll() || Core.input.keyDown(Binding.diagonalPlacement)) && !ui.chatfrag.shown() && !ui.consolefrag.shown() && Math.abs(Core.input.axisTap(Binding.zoom)) > 0
@@ -506,7 +509,7 @@ public class DesktopInput extends InputHandler{
             pollInputPlayer();
         }
 
-        if(Core.input.keyRelease(Binding.select) && !YZFNetSync.noUpdatePlayerMovement()){
+        if(Core.input.keyRelease(Binding.select)){
             player.shooting = false;
         }
 

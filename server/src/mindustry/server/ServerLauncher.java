@@ -12,7 +12,6 @@ import mindustry.mod.Mods.*;
 import mindustry.net.Net;
 import mindustry.net.*;
 import mindustry.ui.*;
-import mindustry.yzf.MindustryYZF;
 
 import java.time.*;
 
@@ -121,7 +120,7 @@ public class ServerLauncher implements ApplicationListener{
         Core.app.addListener(new TpsMonitor());
 
         mods.eachClass(Mod::init);
-        MindustryYZF.bootstrap(args, ServerControl.instance);
+        YZFBridge.bootstrap(args, ServerControl.instance);
 
         Events.fire(new ServerLoadEvent());
     }

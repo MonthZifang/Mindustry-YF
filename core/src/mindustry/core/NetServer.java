@@ -828,11 +828,11 @@ public class NetServer implements ApplicationListener{
             boolean ignorePosition = dead || unit.id != unitID;
             float newx = unit.x, newy = unit.y;
 
-            if(!ignorePosition){
-                float positionError = Mathf.dst(x, y, unit.x, unit.y);
-                con.syncLastPositionError = positionError;
-                YZFNetworkMetrics.recordPositionError(positionError);
+            float positionError = Mathf.dst(x, y, unit.x, unit.y);
+            con.syncLastPositionError = positionError;
+            YZFNetworkMetrics.recordPositionError(positionError);
 
+            if(!ignorePosition){
                 unit.vel.set(xVelocity, yVelocity).limit(maxSpeed);
 
                 vector.set(x, y).sub(unit);

@@ -1,0 +1,13 @@
+# YZF 核心网络模块元数据 (Go 示例)
+# build 段启用热编译: 只放源码 (main.go + go.mod), 网关检测到源码变化自动 go build 并重启模块。
+#   type: go - 执行 go build -o <command> . (有 go.mod 时)。
+{
+  id: netwatch
+  name: "带宽哨兵"
+  version: "1.0.0"
+  priority: 20
+  enabled: true
+  command: "netwatch.exe"
+  args: []
+  build: { type: "go" }
+}

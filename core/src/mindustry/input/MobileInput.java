@@ -20,7 +20,6 @@ import mindustry.game.EventType.*;
 import mindustry.game.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
-import mindustry.net.*;
 import mindustry.type.*;
 import mindustry.ui.*;
 import mindustry.world.*;
@@ -821,7 +820,7 @@ public class MobileInput extends InputHandler implements GestureListener{
         }
 
         if(Core.settings.getBool("keyboard")){
-            if(Core.input.keyRelease(Binding.select) && !YZFNetSync.noUpdatePlayerMovement()){
+            if(Core.input.keyRelease(Binding.select)){
                 player.shooting = false;
             }
 
@@ -831,9 +830,7 @@ public class MobileInput extends InputHandler implements GestureListener{
         }
 
         if(!player.dead() && !state.isPaused() && !locked){
-            if(!YZFNetSync.noUpdatePlayerMovement()){
-                updateMovement(player.unit());
-            }
+            updateMovement(player.unit());
         }
 
         //reset state when not placing

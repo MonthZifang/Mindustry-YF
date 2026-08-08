@@ -12,11 +12,11 @@ import arc.util.*;
 import arc.util.Log.*;
 import arc.util.io.*;
 import mindustry.*;
+import mindustry.events.*;
 import mindustry.game.EventType.*;
 import mindustry.net.Administration.*;
 import mindustry.net.Net.*;
 import mindustry.net.Packets.*;
-import mindustry.events.*;
 import net.jpountz.lz4.*;
 
 import java.io.*;

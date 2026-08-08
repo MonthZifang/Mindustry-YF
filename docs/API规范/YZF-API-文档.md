@@ -386,13 +386,13 @@ yzf reload <plugin-id>         # 重载插件
 | **软依赖缺失** | 模块**正常加载**，日志中记录警告                           |
 | **循环依赖**  | 日志中记录错误路径（如 `A -> B -> C -> A`），模块仍会加载但顺序不确定 |
 
-**依赖 ID 格式：** 使用模块的完整 ID，即 `author/moduleId`，如 `"月子芳/yueyu-hud"`。
+**依赖 ID 格式：** 使用模块的完整 ID，即 `author/moduleId`，如 `"monthzifang/yueyu-hud"`。
 
 ```hjson
 {
     id: "my-plugin"
     // 硬依赖：没有 yueyu-hud 就不加载
-    depends: ["月子芳/yueyu-hud"]
+    depends: ["monthzifang/yueyu-hud"]
 
     // 软依赖：有 redis-main 就用，没有也正常运行
     softDepends: ["example/redis-helper"]
@@ -3253,7 +3253,7 @@ var result = JSON.parse(yzf.player.list()); // yzf 返回 Java String，JSON.par
 
 ## 13. 服务端命令参考
 
-> 所有命令以 `yzf` 开头，在游戏内控制台或服务端终端执行。支持中英文别名（如 `yzf status` ≡ `yzf 状态`）。`yzf help [页码]` 分页列出全部命令，`yzf help all` 一次性打印。模块 ID 统一用完整格式 `author/moduleId`（如 `月子芳/yueyu-hud`）。
+> 所有命令以 `yzf` 开头，在游戏内控制台或服务端终端执行。支持中英文别名（如 `yzf status` ≡ `yzf 状态`）。`yzf help [页码]` 分页列出全部命令，`yzf help all` 一次性打印。模块 ID 统一用完整格式 `author/moduleId`（如 `monthzifang/yueyu-hud`）。
 
 ### 13.1 模块与插件管理
 
@@ -3762,15 +3762,15 @@ rl.on("line", line => {
 | 插件                       | 作者    | 说明                               | 依赖              |
 | ------------------------ | ----- | -------------------------------- | --------------- |
 | **UHD Status UI**        | nano  | 服务端状态采集 + Web Dashboard（端口 8090） | 可选：Redis, SQL   |
-| **UHD Render Framework** | Codex | 通用 HUD 渲染���架                      | `月子芳/yueyu-hud` |
-| **yueyu HUD Activator**  | 月子芳   | 加载 yueyu HUD 库并激活事件              | `月子芳/yueyu-hud` |
+| **UHD Render Framework** | Codex | 通用 HUD 渲染���架                      | `monthzifang/yueyu-hud` |
+| **yueyu HUD Activator**  | monthzifang   | 加载 yueyu HUD 库并激活事件              | `monthzifang/yueyu-hud` |
 | **UHD Join Tab**         | Codex | 玩家加入提示 + TAB 列表显示 comID          | —               |
 
 ---
 
 ### 17.4 yueyu HUD 库
 
-**作者：** 月子芳  
+**作者：** monthzifang  
 **路径：** `modules/yueyu HUD/`
 
 通用 JS 库，提供 20 个 API 模块：弹窗、HUD 状态栏、欢迎、公告、消息队列、维护模式、防刷屏、定时任务、MOTD 等。

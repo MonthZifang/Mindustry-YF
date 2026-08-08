@@ -22,6 +22,7 @@ public final class YZFEventRegistry{
 
         // 第一阶段自定义事件（mindustry.events 包，非 EventType 内部类）
         register("SendPacketEvent", SendPacketEvent.class);
+        register("ReceivePacketEvent", ReceivePacketEvent.class);
         register("PlayerTeamChangedEvent", PlayerTeamChangedEvent.class);
         register("HealthChangedEvent", HealthChangedEvent.class);
         register("LogicAssembledEvent", LogicAssembledEvent.class);

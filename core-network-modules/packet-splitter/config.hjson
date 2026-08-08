@@ -1,0 +1,31 @@
+# packet-splitter 运行时配置
+# 修改后重启模块生效 (yzf net reload 或服务端重启)。
+
+# --- 常规拆包参数 ---
+# 消息超过该字符数视为大包, 触发拆分
+splitThreshold: 200
+# 每个分片最大字符数 (UTF-8 边界安全切分)
+splitChunkSize: 100
+# 相邻分片发送间隔 (毫秒), 用于平滑突发
+splitIntervalMs: 60
+
+# --- 整形模式 (带宽压力自适应) ---
+# 上行带宽超过该值 (bytes/s) 进入整形模式
+bandwidthHighBps: 150000
+# 上行带宽回落到该值以下退出整形模式
+bandwidthLowBps: 80000
+# 整形模式下的收紧参数
+shapedThreshold: 120
+shapedChunkSize: 80
+shapedIntervalMs: 100
+
+# --- 突发抑制 (整形模式下对大流量包类型限速, 单位: 包/秒) ---
+burstControl: 1
+# BlockSnapshotCallPacket: 方块快照, 典型的大突发源
+burstLimitSnapshot: 25
+# SyncCallPacket: 实体同步
+burstLimitSync: 30
+
+# --- 其他 ---
+# 每 N 秒向 stderr 打印一次模块状态
+statsLogEvery: 30

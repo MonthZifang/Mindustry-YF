@@ -34,6 +34,18 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
     private Scripts scripts;
     private static final long reloadDebounceMs = 750L;
 
+    // 最近一次 reloadAll 的加载结果统计（用于启动公告）。
+    private volatile int lastLoadedCount;
+    private volatile int lastFailedCount;
+    private volatile int lastDisabledCount;
+
+    @Override
+    public int lastLoadedCount(){ return lastLoadedCount; }
+    @Override
+    public int lastFailedCount(){ return lastFailedCount; }
+    @Override
+    public int lastDisabledCount(){ return lastDisabledCount; }
+
     public YZFJsRuntime(YZFModuleRegistry registry){
         this.registry = registry;
     }
@@ -47,10 +59,22 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
         ensureScripts();
 
         Seq<String> validIds = new Seq<>();
+        int loaded = 0, failed = 0, disabled = 0;
         for(YZFModuleDefinition module : registry.modules()){
             validIds.add(module.fullId());
-            execute(module);
+            boolean enabled = module.meta.enabled;
+            boolean ok = execute(module);
+            if(!enabled){
+                disabled++;
+            }else if(ok){
+                loaded++;
+            }else{
+                failed++;
+            }
         }
+        lastLoadedCount = loaded;
+        lastFailedCount = failed;
+        lastDisabledCount = disabled;
 
         Seq<String> toRemove = new Seq<>();
         for(String id : loadedModules.keys()){

@@ -10,7 +10,7 @@ import java.security.MessageDigest;
 import java.util.Base64;
 
 /** Authentication policy for traffic that crosses the server's private network boundary. */
-public final class YZFExternalAccessConfig{
+public final class YZFExternalAccessConfig implements mindustry.server.YZFBridge.ExternalAccess{
     private final boolean enabled, requirePublic, requirePrivate, attachOutboundToken, requireTlsPublic, allowInsecurePublicSocket;
     private final String token;
 

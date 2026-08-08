@@ -6,9 +6,9 @@ import arc.net.*;
 import arc.net.Server.*;
 import arc.struct.*;
 import arc.util.*;
+import mindustry.events.*;
 import mindustry.game.EventType.*;
 import mindustry.gen.*;
-import mindustry.events.*;
 import mindustry.net.Packets.*;
 import mindustry.net.Streamable.*;
 import net.jpountz.lz4.*;
@@ -344,6 +344,8 @@ public class Net{
         if(!object.allow(true)){
             return;
         }
+
+        if(ReceivePacketEvent.emit(connection, object)) return;
 
         try{
             if(connection.hasConnected || object.getPriority() == Packet.priorityHigh){

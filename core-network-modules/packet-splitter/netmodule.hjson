@@ -1,0 +1,16 @@
+# YZF 核心网络模块元数据 (core network module)
+# 网关按 priority 升序启动 netmods/ 下的模块; 数字越小越先启动。
+# command 指向编译产物可执行文件（相对本模块文件夹解析）。
+# build 段启用热编译: 只放源码, 网关检测到源码变化自动编译并重启模块。
+#   type: cpp - 使用 MSVC (自动定位 vcvars64.bat) 编译 build.source 指定的主源文件。
+#   source:   - cpp 类型的主源文件路径。
+{
+  id: packet-splitter
+  name: "大包拆分器"
+  version: "1.0.0"
+  priority: 10
+  enabled: true
+  command: "packet-splitter.exe"
+  args: []
+  build: { type: "cpp", source: "src/main.cpp" }
+}

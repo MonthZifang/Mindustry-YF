@@ -12,4 +12,8 @@ public interface YZFScriptRuntime{
     void shutdown();
 
     String mode();
+
+    default int lastLoadedCount(){ return 0; }
+    default int lastFailedCount(){ return 0; }
+    default int lastDisabledCount(){ return 0; }
 }

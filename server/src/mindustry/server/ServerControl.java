@@ -29,9 +29,6 @@ import mindustry.net.Administration.*;
 import mindustry.net.Packets.*;
 import mindustry.net.*;
 import mindustry.type.*;
-import mindustry.yzf.MindustryYZF;
-import mindustry.yzf.YZFExternalAccessConfig;
-import mindustry.yzf.YZFText;
 import org.jline.reader.*;
 import org.jline.reader.impl.completer.*;
 import org.jline.terminal.*;
@@ -505,7 +502,7 @@ public class ServerControl implements ApplicationListener{
         Fi file = Core.settings.getDataDirectory().child("yzf/config/terminal.hjson");
         if(!file.exists()) return;
         try{
-            Jval root = Jval.read(YZFText.readTextSmart(file));
+            Jval root = Jval.read(YZFBridge.readTextSmart(file));
             configuredConsoleMode = root.getString("consoleMode", "").trim().toLowerCase(Locale.ROOT);
             configuredConsoleCharset = root.getString("charset", "").trim();
         }catch(Exception error){
@@ -1511,6 +1508,7 @@ public class ServerControl implements ApplicationListener{
         });
 
         mods.eachClass(p -> p.registerServerCommands(handler));
+        YZFBridge.registerCommands(handler);
         installLocalizedCommandInfo();
     }
 
@@ -1665,7 +1663,7 @@ public class ServerControl implements ApplicationListener{
             Fi file = Vars.dataDirectory.child("yzf").child("config").child("terminal.hjson");
             if(!file.exists()) return;
 
-            Jval root = Jval.read(YZFText.readTextSmart(file));
+            Jval root = Jval.read(YZFBridge.readTextSmart(file));
             if(root == null || !root.isObject()) return;
 
             int configuredPageSize = root.getInt("helpPageSize", root.getInt("pageSize", serverHelpPageSizeDefault));
@@ -1736,7 +1734,7 @@ public class ServerControl implements ApplicationListener{
         addLocalizedCommand("jumpmine-reload", "跳板地雷重载", "重载跳板地雷配置与绑定。");
         addLocalizedCommand("jumpmine-rescan", "跳板地雷重扫", "重新扫描当前地图中的地雷槽位。");
         addLocalizedCommand("jumpmine-sync", "跳板地雷同步", "立即同步远程状态并重绘标签。");
-        addLocalizedCommand("yzf", "云子坊", "MindustryYZF 服务端扩展命令入口。", "可继续使用 `yzf help` 查看下级子命令。");
+        addLocalizedCommand("yzf", "monthzifang", "MindustryYZF 服务端扩展命令入口。", "可继续使用 `yzf help` 查看下级子命令。");
     }
 
     private void addLocalizedCommand(String command, String aliasLabel, String descriptionZh, String... notes){
@@ -1874,7 +1872,7 @@ public class ServerControl implements ApplicationListener{
                     serverSocket = new ServerSocket();
                     serverSocket.setReuseAddress(true);
                     InetAddress bindAddress = InetAddress.getByName(Config.socketInputAddress.string());
-                    YZFExternalAccessConfig access = MindustryYZF.externalAccess();
+                    YZFBridge.ExternalAccess access = YZFBridge.externalAccess();
                     if(access != null && !access.allowsSocketBind(bindAddress)){
                         err("Refusing to bind command socket publicly without allowInsecurePublicSocket: true.");
                         return;
@@ -1932,7 +1930,7 @@ public class ServerControl implements ApplicationListener{
             PrintWriter output = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true)){
             socketOutputs.add(output);
             socket.setSoTimeout(socketAuthenticationTimeoutMillis);
-            YZFExternalAccessConfig externalAccess = MindustryYZF.externalAccess();
+            YZFBridge.ExternalAccess externalAccess = YZFBridge.externalAccess();
             if(externalAccess == null || !externalAccess.allows(socket.getInetAddress(), readSocketToken(input, socket.getInetAddress()))){
                 output.println("ERR authentication required");
                 return;
@@ -1967,7 +1965,7 @@ public class ServerControl implements ApplicationListener{
     }
 
     private String readSocketToken(BufferedReader input, InetAddress address) throws IOException{
-        YZFExternalAccessConfig externalAccess = MindustryYZF.externalAccess();
+        YZFBridge.ExternalAccess externalAccess = YZFBridge.externalAccess();
         if(externalAccess != null && !externalAccess.requiresToken(address)) return "";
         String line = readSocketLine(input);
         return line != null && line.startsWith("AUTH ") ? line.substring(5).trim() : "";
@@ -1989,7 +1987,7 @@ public class ServerControl implements ApplicationListener{
         shuttingDown = true;
         cancelPlayTask();
         toggleSocket(false);
-        MindustryYZF.shutdown();
+        YZFBridge.shutdown();
 
         try{
             if(lineReader != null){

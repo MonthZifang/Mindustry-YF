@@ -4,6 +4,7 @@ import arc.Events;
 import arc.func.Cons;
 import arc.util.Log;
 import mindustry.Vars;
+import mindustry.core.Version;
 import mindustry.game.EventType.ResetEvent;
 import mindustry.game.EventType.PlayerJoin;
 import mindustry.server.ServerControl;
@@ -19,6 +20,7 @@ public final class MindustryYZF{
     private static volatile YZFContext context;
     private static volatile YZFExternalAccessConfig externalAccess;
     private static volatile YZFModHotReloadManager modHotReloadManager;
+    private static volatile YZFNetGateway netGateway;
     private static Cons<ResetEvent> resetHandler;
     private static Cons<PlayerJoin> playerJoinHandler;
 
@@ -92,6 +94,25 @@ public final class MindustryYZF{
             registry.scriptCount(),
             paths.root.absolutePath()
         );
+
+        // ===== 启动公告：全部模块加载完成后展示 =====
+        Log.info("");
+        Log.info("======================================================");
+        Log.info("  [@] 服务端启动公告", name);
+        Log.info("  服务端版本: @", version);
+        Log.info("  游戏版本:   @", Version.combined());
+        Log.info("  插件加载:   成功 @ | 失败 @ | 禁用 @", runtime.lastLoadedCount(), runtime.lastFailedCount(), runtime.lastDisabledCount());
+        Log.info("  官方QQ群:   333641130");
+        Log.info("======================================================");
+        Log.info("");
+
+        // ===== 外部网络模块网关：让任意语言的外部模块参与游戏收发包 =====
+        try{
+            netGateway = new YZFNetGateway(paths, serverControl);
+            netGateway.start();
+        }catch(Throwable error){
+            YZFErrorLog.high(name, "Failed to start external network module gateway", error);
+        }
     }
 
     public static YZFContext context(){
@@ -99,6 +120,8 @@ public final class MindustryYZF{
     }
 
     public static YZFExternalAccessConfig externalAccess(){ return externalAccess; }
+
+    public static YZFNetGateway netGateway(){ return netGateway; }
 
     public static synchronized void reloadExternalAccess(){
         if(context == null) return;
@@ -140,6 +163,15 @@ public final class MindustryYZF{
             }
         }catch(Throwable error){
             YZFErrorLog.high(name, "Failed to stop Mindustry mod hot reload manager", error);
+        }
+
+        try{
+            if(netGateway != null){
+                netGateway.shutdown();
+                netGateway = null;
+            }
+        }catch(Throwable error){
+            YZFErrorLog.high(name, "Failed to shut down external network module gateway", error);
         }
 
         if(context != null){
@@ -315,7 +347,7 @@ public final class MindustryYZF{
                 "and the file watcher will reload YZF modules automatically.\n" +
                 "\n" +
                 "- 00-legacy-api.js: shared legacy globals and helpers.\n" +
-                "- versions/159.2-interface.js: mappings for this Mindustry build.\n" +
+                "- versions/159.7-interface.js: mappings for this Mindustry build.\n" +
                 "\n" +
                 "Use this directory to map old plugin APIs to new Mindustry/YZF APIs when behavior did not really change.\n"
             );
@@ -326,7 +358,7 @@ public final class MindustryYZF{
             middleware.writeString(
                 "// External hot-reloadable compatibility middleware for legacy YZF plugins.\n" +
                 "// This file is evaluated before every YZF module script. Add API aliases here\n" +
-                "// when 159.2 moves a Mindustry/Arc/YZF symbol without changing behavior.\n" +
+                "// when 159.7 moves a Mindustry/Arc/YZF symbol without changing behavior.\n" +
                 "yzfCompat.install(function(yzf, yzfModule, compat, global){\n" +
                 "  compat.alias('Core', Packages.arc.Core);\n" +
                 "  compat.alias('Events', Packages.arc.Events);\n" +
@@ -345,10 +377,10 @@ public final class MindustryYZF{
 
         arc.files.Fi versionsDir = paths.compatDir.child("versions");
         versionsDir.mkdirs();
-        arc.files.Fi versionMiddleware = versionsDir.child("159.2-interface.js");
+        arc.files.Fi versionMiddleware = versionsDir.child("159.7-interface.js");
         if(!versionMiddleware.exists()){
             versionMiddleware.writeString(
-                "// Mindustry 159.2 external interface adapter.\n" +
+                "// Mindustry 159.7 external interface adapter.\n" +
                 "// Edit this file after the server starts to adapt old plugin APIs without rebuilding the server.\n" +
                 "// Saving this file triggers YZF hot reload through the file watcher.\n" +
                 "\n" +

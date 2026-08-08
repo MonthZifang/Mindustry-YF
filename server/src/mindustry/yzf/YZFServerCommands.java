@@ -74,6 +74,7 @@ public final class YZFServerCommands{
             case "players", "玩家" -> printDetailedPlayers(context, args);
             case "dbs", "databases", "数据库" -> printDatabases(context);
             case "uuid" -> printDatabasePlayersWithUuid(context, args);
+            case "net", "netgateway", "网络模块" -> handleNetGateway(context, args);
             default -> {
                 String resolvedDatabaseId = resolveDatabaseAlias(context, action);
                 if(resolvedDatabaseId != null){
@@ -144,7 +145,8 @@ public final class YZFServerCommands{
             new HelpEntry("players", "yzf players [页码]", "查看在线玩家详细列表，默认每页 15 人。"),
             new HelpEntry("dbs", "yzf dbs", "列出当前可查询的数据库。"),
             new HelpEntry("database", "yzf <数据库别名> [页码]", "分页查看数据库中的玩家信息。"),
-            new HelpEntry("uuid", "yzf uuid <数据库别名> [页码]", "分页查看数据库中的玩家信息，并额外显示原生 UUID。")
+            new HelpEntry("uuid", "yzf uuid <数据库别名> [页码]", "分页查看数据库中的玩家信息，并额外显示原生 UUID。"),
+            new HelpEntry("net", "yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>]", "管理外部网络模块网关与核心网络模块（热添加/热替换/热移除）。")
         };
     }
 
@@ -1042,6 +1044,81 @@ public final class YZFServerCommands{
             this.key = key;
             this.usage = usage;
             this.description = description;
+        }
+    }
+
+    private static void handleNetGateway(YZFContext context, String[] args){
+        // The command handler packs every token after "net" into args[1] (greedy "args..." param),
+        // so rejoin and re-split to normalize sub-command parsing for both layouts.
+        StringBuilder joined = new StringBuilder();
+        for(int i = 1; i < args.length; i++){
+            if(i > 1) joined.append(' ');
+            joined.append(args[i]);
+        }
+        String[] sub = joined.length() == 0 ? new String[0] : joined.toString().trim().split("\\s+");
+        String action = sub.length >= 1 ? sub[0].toLowerCase(Locale.ROOT) : "status";
+        String moduleId = sub.length >= 2 ? sub[1] : "";
+        YZFNetGateway gateway = MindustryYZF.netGateway();
+        switch(action){
+            case "status", "状态" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] 外部网络模块网关状态：\n@", MindustryYZF.name, gateway.status());
+                }
+            }
+            case "start", "启动" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    gateway.start();
+                    Log.info("[@] 外部网络模块网关已请求启动。", MindustryYZF.name);
+                }
+            }
+            case "stop", "停止" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    gateway.shutdown();
+                    Log.info("[@] 外部网络模块网关已停止。", MindustryYZF.name);
+                }
+            }
+            case "reload", "重载" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] @", MindustryYZF.name, gateway.reload());
+                }
+            }
+            case "mods", "模块", "列表" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] 核心网络模块：\n@", MindustryYZF.name, gateway.listNetModules());
+                }
+            }
+            case "rescan", "重扫", "热添加" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] @", MindustryYZF.name, gateway.rescanNetModules());
+                }
+            }
+            case "restart", "热重启" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] @", MindustryYZF.name, gateway.restartNetModule(moduleId));
+                }
+            }
+            case "stopmod", "热移除" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] @", MindustryYZF.name, gateway.stopNetModule(moduleId));
+                }
+            }
+            default -> Log.err("用法: yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>]");
         }
     }
 

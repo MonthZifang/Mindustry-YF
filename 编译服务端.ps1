@@ -14,7 +14,7 @@ Write-Host '========================================'
 Write-Host (Show-Text '5LuF5p6E5bu65pyN5Yqh56uv5Y+R6KGM5YyF77yM5LiN5p6E5bu65a6i5oi356uv44CC')
 Write-Host ''
 
-& .\gradlew.bat :server:dist --no-daemon -PnoLocalArc=true
+& .\gradlew.bat :server:dist --no-daemon -PnoLocalArc=true -Pbuildversion=159.7
 if($LASTEXITCODE -ne 0){
     Write-Host ''
     Write-Host (Show-Text 'W+Wksei0pV0g5pyN5Yqh56uv57yW6K+R5aSx6LSl77yM6K+35p+l55yL5LiK5pa56ZSZ6K+v5L+h5oGv44CC') -ForegroundColor Red

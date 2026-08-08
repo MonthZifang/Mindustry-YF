@@ -79,7 +79,7 @@ public final class YZFCompatibilityMiddleware{
               define('Pal', Packages.mindustry.graphics.Pal);
 
               var compat = global.yzfCompat || {};
-              compat.version = '159.2';
+              compat.version = '159.7';
               compat.define = define;
               compat.getPath = function(root, path){
                 var parts = String(path).split('.');

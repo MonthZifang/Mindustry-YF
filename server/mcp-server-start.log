@@ -1,9 +1,0 @@
-[07-18-2026 21:04:22] [W] Your server is running a custom build, which means that client checking is disabled.
-[07-18-2026 21:04:22] [W] It is highly advised to specify which version you're using by building with gradle args -Pbuildversion=<build>
-[07-18-2026 21:04:22] [I] [MindustryYZF] 模块注册表扫描完成。模块数=0 脚本数=0
-[07-18-2026 21:04:23] [I] [MindustryYZF] 服务已启动: player-sqlite -> SQLite -> jdbc:sqlite:config/yzf/config/services/player-sqlite.db
-[07-18-2026 21:04:23] [I] [MindustryYZF] comid registry loaded: 0 entries
-[07-18-2026 21:04:23] [I] [MindustryYZF] 模块注册表扫描完成。模块数=0 脚本数=0
-[07-18-2026 21:04:23] [I] [MindustryYZF] 启动完成。运行时=JavaScript + Embedded Runtimes 模块数=0 脚本数=0 根目录=C:/Users/43551/Desktop/MindustryYF/月见草YF框架/Mindustry-159.2/server/config/yzf
-[07-18-2026 21:04:23] [I] Server loaded. Type 'help' for help.
-> 
