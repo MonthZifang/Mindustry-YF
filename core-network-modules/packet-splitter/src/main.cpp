@@ -209,6 +209,18 @@ static std::atomic<long long> g_upload_bps{0};
 static std::atomic<long long> g_split_total{0};
 static std::atomic<bool> g_burst_rules_sent{false};
 static std::atomic<bool> g_running{true};
+static std::atomic<long long> g_pending_chunks{0};
+
+// 60 秒滚动窗口的单包尺寸统计。
+struct PacketWindowSample{
+    std::chrono::steady_clock::time_point at;
+    long long packet_max;
+    long long packet_min;
+    long long packet_bytes;
+    long long packet_count;
+};
+static std::deque<PacketWindowSample> g_packet_window;
+static std::mutex g_window_mutex;
 
 static void log_stderr(const std::string& msg){
     std::fprintf(stderr, "[packet-splitter] %s\n", msg.c_str());
@@ -429,11 +441,61 @@ static void handle_net_stats(const std::string& line){
     long long bps = (long long)upload;
     g_upload_bps.store(bps);
 
+    // 解析单包尺寸统计 (网关按采样窗口结算, 此处维护 60 秒滚动窗口)。
+    double packet_max = 0, packet_min = 0, packet_bytes = 0, packet_count = 0;
+    json_get_number(line, "packetMax", packet_max);
+    json_get_number(line, "packetMin", packet_min);
+    json_get_number(line, "packetCount", packet_count);
+    double packet_avg = 0;
+    json_get_number(line, "packetAvg", packet_avg);
+    packet_bytes = packet_avg * packet_count;
+
+    double pending = 0;
+    json_get_number(line, "pendingChunks", pending);
+    g_pending_chunks.store((long long)pending);
+
+    double gateway_split = 0;
+    if(json_get_number(line, "splitPackets", gateway_split) && gateway_split > 0){
+        long long reported = (long long)gateway_split;
+        long long current = g_split_total.load();
+        if(reported > current) g_split_total.store(reported);
+    }
+
+    if(packet_count > 0){
+        std::lock_guard<std::mutex> lock(g_window_mutex);
+        g_packet_window.push_back({std::chrono::steady_clock::now(),
+            (long long)packet_max, (long long)packet_min,
+            (long long)packet_bytes, (long long)packet_count});
+        // 丢弃 60 秒前的样本。
+        auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(60);
+        while(!g_packet_window.empty() && g_packet_window.front().at < cutoff){
+            g_packet_window.pop_front();
+        }
+    }
+
     if(!g_shaping.load() && bps >= g_config.bandwidth_high_bps){
         apply_shaping(true);
     }else if(g_shaping.load() && bps <= g_config.bandwidth_low_bps){
         apply_shaping(false);
     }
+}
+
+// 汇总最近 60 秒的单包尺寸统计。
+static void packet_window_stats(long long& out_max, long long& out_min, long long& out_avg, long long& out_count){
+    out_max = 0; out_min = 0; out_avg = 0; out_count = 0;
+    std::lock_guard<std::mutex> lock(g_window_mutex);
+    if(g_packet_window.empty()) return;
+    long long max_v = 0, min_v = -1, total_bytes = 0, total_count = 0;
+    for(const auto& s : g_packet_window){
+        if(s.packet_max > max_v) max_v = s.packet_max;
+        if(s.packet_min > 0 && (min_v < 0 || s.packet_min < min_v)) min_v = s.packet_min;
+        total_bytes += s.packet_bytes;
+        total_count += s.packet_count;
+    }
+    out_max = max_v;
+    out_min = min_v < 0 ? 0 : min_v;
+    out_count = total_count;
+    out_avg = total_count > 0 ? total_bytes / total_count : 0;
 }
 
 static void handle_line(const std::string& line){
@@ -500,10 +562,14 @@ int main(){
                 std::lock_guard<std::mutex> lock(g_queue_mutex);
                 queued = g_chunk_queue.size();
             }
-            char buf[192];
-            std::snprintf(buf, sizeof(buf), "状态: 上行=%lld B/s 整形=%s 已拆包=%lld 待发分片=%zu",
+            long long wmax = 0, wmin = 0, wavg = 0, wcount = 0;
+            packet_window_stats(wmax, wmin, wavg, wcount);
+            char buf[320];
+            std::snprintf(buf, sizeof(buf),
+                "状态: 上行=%lld B/s 整形=%s 已拆包=%lld 待发分片=%zu | 近60秒单包: 最大=%lld B 最小=%lld B 平均=%lld B 包数=%lld",
                 (long long)g_upload_bps.load(), g_shaping.load() ? "是" : "否",
-                (long long)g_split_total.load(), queued);
+                (long long)g_split_total.load(), queued,
+                wmax, wmin, wavg, wcount);
             log_stderr(buf);
         }
     });

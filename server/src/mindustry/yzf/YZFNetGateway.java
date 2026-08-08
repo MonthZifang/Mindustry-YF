@@ -1435,7 +1435,12 @@ public final class YZFNetGateway{
                 .append(",\"tps\":").append(Vars.actualServerTps)
                 .append(",\"players\":").append(playerCount())
                 .append(",\"pendingChunks\":").append(pendingChunks.size())
-                .append(",\"rateLimited\":").append(rateLimitedPackets.get());
+                .append(",\"rateLimited\":").append(rateLimitedPackets.get())
+                .append(",\"splitPackets\":").append(splitPackets.get())
+                .append(",\"packetMax\":").append(YZFNetworkMetrics.lastUploadPacketMax())
+                .append(",\"packetMin\":").append(YZFNetworkMetrics.lastUploadPacketMin())
+                .append(",\"packetAvg\":").append(YZFNetworkMetrics.lastUploadPacketAvg())
+                .append(",\"packetCount\":").append(YZFNetworkMetrics.lastUploadPacketCount());
             String top = topPacketsJson();
             if(!top.isEmpty()){
                 fields.append(",\"topPackets\":").append(top);

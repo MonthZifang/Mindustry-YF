@@ -16,9 +16,24 @@ public final class YZFNetworkMetrics{
     public static volatile long syncForcedReliableSnapshots;
     public static volatile float syncLastPositionError;
 
+    // Per-packet size tracking (upload direction), window = time between sampleNow() calls.
+    public static volatile long uploadPacketMax;
+    public static volatile long uploadPacketMin;
+    public static volatile long uploadPacketCount;
+    public static volatile long uploadPacketBytes;
+    // Values of the last completed window, exposed to the gateway.
+    public static volatile long lastUploadPacketMax;
+    public static volatile long lastUploadPacketMin;
+    public static volatile long lastUploadPacketCount;
+    public static volatile long lastUploadPacketBytes;
+
     public static synchronized void recordUpload(long bytes){
         if(bytes > 0L){
             uploadBytesAccum += bytes;
+            uploadPacketCount++;
+            uploadPacketBytes += bytes;
+            if(bytes > uploadPacketMax) uploadPacketMax = bytes;
+            if(uploadPacketMin == 0L || bytes < uploadPacketMin) uploadPacketMin = bytes;
         }
     }
 
@@ -67,6 +82,14 @@ public final class YZFNetworkMetrics{
         downloadBytesPerSecond = (downloadBytesAccum * 1000L) / elapsed;
         uploadBytesAccum = 0L;
         downloadBytesAccum = 0L;
+        lastUploadPacketMax = uploadPacketMax;
+        lastUploadPacketMin = uploadPacketMin;
+        lastUploadPacketCount = uploadPacketCount;
+        lastUploadPacketBytes = uploadPacketBytes;
+        uploadPacketMax = 0L;
+        uploadPacketMin = 0L;
+        uploadPacketCount = 0L;
+        uploadPacketBytes = 0L;
         lastSampleAtMillis = now;
     }
 
@@ -100,5 +123,21 @@ public final class YZFNetworkMetrics{
 
     public static float syncLastPositionError(){
         return syncLastPositionError;
+    }
+
+    public static long lastUploadPacketMax(){
+        return lastUploadPacketMax;
+    }
+
+    public static long lastUploadPacketMin(){
+        return lastUploadPacketMin;
+    }
+
+    public static long lastUploadPacketCount(){
+        return lastUploadPacketCount;
+    }
+
+    public static long lastUploadPacketAvg(){
+        return lastUploadPacketCount > 0L ? lastUploadPacketBytes / lastUploadPacketCount : 0L;
     }
 }
