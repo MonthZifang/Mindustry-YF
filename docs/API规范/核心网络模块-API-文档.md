@@ -502,7 +502,8 @@ statsLogEvery: 30
 ### 5.4 NetStatsEvent 采样机制
 
 - 网关每 1 秒调用 `YZFNetworkMetrics.sampleNow()`：把过去一段时间的上下行字节累计量折算成 B/s。
-- 随后把 `uploadBps / downloadBps / tps / players / pendingChunks / rateLimited / topPackets` 组装成 `NetStatsEvent` 入队推送。
+- 同一窗口内还结算**上传方向单包尺寸统计**：`recordUpload(bytes)` 每次发包累加包数与字节数并更新最大/最小值，`sampleNow()` 时把窗口结果转入 `lastUploadPacket*` 并清零（`YZFNetworkMetrics.lastUploadPacketMax()/Min()/Count()/Avg()`，平均值为字节数÷包数的整数商，包数为 0 时返回 0）。
+- 随后把 `uploadBps / downloadBps / tps / players / pendingChunks / rateLimited / splitPackets / packetMax / packetMin / packetAvg / packetCount / topPackets` 组装成 `NetStatsEvent` 入队推送。
 - `topPackets` 是"上一次采样以来的分包计数"，采样即清零（键形如 `S:BlockSnapshotCallPacket`、`R:ConnectPacket`）。
 
 ### 5.5 事件分发与背压
@@ -788,12 +789,19 @@ external 拆分模式下，模块回传一个待发分片。
   "players": 23,
   "pendingChunks": 0,
   "rateLimited": 17,
+  "splitPackets": 12,
+  "packetMax": 48213,
+  "packetMin": 12,
+  "packetAvg": 305,
+  "packetCount": 596,
   "topPackets": { "S:BlockSnapshotCallPacket": 4211, "S:SyncCallPacket": 1902 }
 }
 ```
 
 - `uploadBps`/`downloadBps`：上一个采样周期的折算带宽（bytes/s），来自 `YZFNetworkMetrics`。
 - `tps`：`Vars.actualServerTps` 实测 TPS。
+- `splitPackets`：网关累计已拆包数。
+- `packetMax`/`packetMin`/`packetAvg`/`packetCount`：**上一个采样窗口**内上传方向的单包尺寸统计（最大/最小/平均字节数、包数）；平均值为整数商，窗口内无包时为 0。
 - `topPackets`：上一周期各方向分包计数，**采样即清零**；无流量时该字段缺省。
 
 **示例处理（Go，netwatch 真实写法）：**
@@ -1261,7 +1269,9 @@ netwatch 目录附带 `build.bat`：`go build` 到临时文件 → POST `/yzfnet
 
 另有：
 
-- 心跳线程：每 `statsLogEvery` 秒打印 `状态: 上行=... B/s 整形=是/否 已拆包=N 待发分片=M`。
+- **60 秒滚动窗口单包统计**：每次收到 `NetStatsEvent` 时解析 `packetMax/packetMin/packetAvg/packetCount`（窗口字节数 = packetAvg × packetCount 反推），连同时间戳入队；每次入队后丢弃 60 秒前的样本。汇总函数 `packet_window_stats` 输出窗口内的最大包、最小包（忽略 0 值）、总包数与平均字节数，供状态日志使用。
+- 同时从事件里同步两个网关侧累计量：`pendingChunks`（待发分片）直接记录；`splitPackets`（网关累计拆包数）若大于本地 `g_split_total` 则对齐到网关值——保证"已拆包"计数与网关一致（external 模式下网关也在计数）。
+- 心跳线程：每 `statsLogEvery` 秒打印状态，格式为 `状态: 上行=... B/s 整形=是/否 已拆包=N 待发分片=M | 近60秒单包: 最大=... B 最小=... B 平均=... B 包数=...`。
 - Windows 下 stdin/stdout 设置 64KB 全缓冲（`setvbuf`）。
 - stdout 写入有互斥锁保护（事件处理与 pacer 线程共享）。
 
