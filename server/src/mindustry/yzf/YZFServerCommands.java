@@ -125,7 +125,7 @@ public final class YZFServerCommands{
             new HelpEntry("metrics", "yzf metrics", "查看运行指标、调用计数和最近一次故障。"),
             new HelpEntry("scan", "yzf scan", "重新扫描模块目录。"),
             new HelpEntry("watch", "yzf watch on|off|restart|status", "控制文件热监听。"),
-            new HelpEntry("hotmods", "yzf hotmods", "Hot reload YZF modules and Mindustry script mods."),
+            new HelpEntry("hotmods", "yzf hotmods", "热重载 YZF 模块与 Mindustry 脚本 mod。"),
             new HelpEntry("reload", "yzf reload [author/moduleId]", "重载全部模块，或只重载指定模块。"),
             new HelpEntry("modules", "yzf modules", "列出全部模块。"),
             new HelpEntry("info", "yzf info <author/moduleId>", "查看模块详情。"),
@@ -146,7 +146,7 @@ public final class YZFServerCommands{
             new HelpEntry("dbs", "yzf dbs", "列出当前可查询的数据库。"),
             new HelpEntry("database", "yzf <数据库别名> [页码]", "分页查看数据库中的玩家信息。"),
             new HelpEntry("uuid", "yzf uuid <数据库别名> [页码]", "分页查看数据库中的玩家信息，并额外显示原生 UUID。"),
-            new HelpEntry("net", "yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>]", "管理外部网络模块网关与核心网络模块（热添加/热替换/热移除）。")
+            new HelpEntry("net", "yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>|log <id|all> <on|off|status>|enable <id>|disable <id>]", "管理外部网络模块网关与核心网络模块（热添加/热替换/热移除/日志开关/启用禁用）。")
         };
     }
 
@@ -1118,7 +1118,56 @@ public final class YZFServerCommands{
                     Log.info("[@] @", MindustryYZF.name, gateway.stopNetModule(moduleId));
                 }
             }
-            default -> Log.err("用法: yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>]");
+            case "log", "日志", "日志开关" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    String target = sub.length >= 2 ? sub[1] : "";
+                    String logAction = sub.length >= 3 ? sub[2].toLowerCase(Locale.ROOT) : "status";
+                    if(target.isEmpty()){
+                        Log.err("用法: yzf net log <模块ID|all> <on|off|status>");
+                    }else if(logAction.equals("status") || logAction.equals("状态")){
+                        try{
+                            Jval parsed = Jval.read(gateway.netModulesStatusJson());
+                            Jval modules = parsed.get("modules");
+                            if(modules == null || !modules.isArray() || modules.asArray().size == 0){
+                                Log.info("[@] 暂无核心网络模块。", MindustryYZF.name);
+                            }else{
+                                Log.info("[@] 核心网络模块终端状态日志开关：", MindustryYZF.name);
+                                for(Jval item : modules.asArray()){
+                                    Log.info("  @ (@): 终端状态日志@ | 运行状态@",
+                                        item.getString("id", "?"), item.getString("name", "?"),
+                                        item.getBool("statsLog", true) ? "输出中" : "已静默",
+                                        item.getBool("running", false) ? "运行中" : "已停止");
+                                }
+                            }
+                        }catch(Throwable error){
+                            Log.err("读取核心网络模块状态失败: @", String.valueOf(error.getMessage()));
+                        }
+                    }else if(logAction.equals("on") || logAction.equals("开启") || logAction.equals("true")){
+                        Log.info("[@] @", MindustryYZF.name, gateway.setNetModuleLog(target, true));
+                    }else if(logAction.equals("off") || logAction.equals("关闭") || logAction.equals("静默") || logAction.equals("false")){
+                        Log.info("[@] @", MindustryYZF.name, gateway.setNetModuleLog(target, false));
+                    }else{
+                        Log.err("用法: yzf net log <模块ID|all> <on|off|status>");
+                    }
+                }
+            }
+            case "enable", "启用模块" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] @", MindustryYZF.name, gateway.setNetModuleEnabled(moduleId, true));
+                }
+            }
+            case "disable", "禁用模块" -> {
+                if(gateway == null){
+                    Log.err("[@] 外部网络模块网关未初始化。", MindustryYZF.name);
+                }else{
+                    Log.info("[@] @", MindustryYZF.name, gateway.setNetModuleEnabled(moduleId, false));
+                }
+            }
+            default -> Log.err("用法: yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>|log <id|all> <on|off|status>|enable <id>|disable <id>]");
         }
     }
 

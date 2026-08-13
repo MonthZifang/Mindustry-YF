@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <iostream>
 #include <mutex>
@@ -210,6 +211,9 @@ static std::atomic<long long> g_split_total{0};
 static std::atomic<bool> g_burst_rules_sent{false};
 static std::atomic<bool> g_running{true};
 static std::atomic<long long> g_pending_chunks{0};
+// 终端状态日志开关: true = 静默 (不向 stderr 输出状态行)。
+// 每秒从 log-control.json 刷新; 文件不存在或解析失败时视为开启输出。
+static std::atomic<bool> g_stats_log_muted{false};
 
 // 60 秒滚动窗口的单包尺寸统计。
 struct PacketWindowSample{
@@ -254,6 +258,68 @@ static std::string read_whole_file(const std::string& path){
     }
     std::fclose(f);
     return content;
+}
+
+static bool write_whole_file(const std::string& path, const std::string& content){
+    // 先写临时文件再原子替换, 避免读端读到半截内容。
+    std::string tmp = path + ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if(!f) return false;
+    size_t written = std::fwrite(content.data(), 1, content.size(), f);
+    std::fclose(f);
+    if(written != content.size()){
+        std::remove(tmp.c_str());
+        return false;
+    }
+    std::remove(path.c_str());
+    if(std::rename(tmp.c_str(), path.c_str()) != 0){
+        std::remove(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+// 读取终端日志开关控制文件 log-control.json。
+// 文件格式: {"statsLog": true|false}; statsLog=false 表示静默。
+// 文件不存在或解析失败时保持默认 (输出状态日志)。
+static void load_log_control(){
+    std::string content = read_whole_file("log-control.json");
+    if(content.empty()) return;
+    std::string v;
+    if(!json_get_string(content, "statsLog", v)){
+        // 布尔值不带引号时按字面量匹配。
+        if(content.find("\"statsLog\":false") != std::string::npos ||
+           content.find("\"statsLog\": false") != std::string::npos){
+            g_stats_log_muted.store(true);
+        }else if(content.find("\"statsLog\":true") != std::string::npos ||
+                 content.find("\"statsLog\": true") != std::string::npos){
+            g_stats_log_muted.store(false);
+        }
+        return;
+    }
+    if(v == "false" || v == "off" || v == "0") g_stats_log_muted.store(true);
+    else if(v == "true" || v == "on" || v == "1") g_stats_log_muted.store(false);
+}
+
+// 每秒把当前统计写为 status.json (模块目录下), 供网关侧插件读取后
+// 通过 Web API 暴露。字段:
+//   statsLog  - 终端状态日志当前是否输出 (false = 已静默)
+//   uploadBps - 实时上行带宽 (bytes/s)
+//   window60s - 近60秒单包尺寸统计
+static void write_status_json(long long wmax, long long wmin, long long wavg,
+                              long long wcount, long long queued){
+    char buf[640];
+    std::snprintf(buf, sizeof(buf),
+        "{\"moduleId\":\"packet-splitter\",\"timestamp\":%lld,\"statsLog\":%s,"
+        "\"uploadBps\":%lld,\"shaping\":%s,\"splitTotal\":%lld,\"queuedChunks\":%lld,"
+        "\"window60s\":{\"packetMax\":%lld,\"packetMin\":%lld,\"packetAvg\":%lld,\"packetCount\":%lld}}",
+        (long long)std::time(nullptr),
+        g_stats_log_muted.load() ? "false" : "true",
+        (long long)g_upload_bps.load(),
+        g_shaping.load() ? "true" : "false",
+        (long long)g_split_total.load(), queued,
+        wmax, wmin, wavg, wcount);
+    write_whole_file("status.json", buf);
 }
 
 static void load_local_config(){
@@ -534,6 +600,23 @@ static void handle_line(const std::string& line){
 }
 
 // ----------------------------------------------------------------------------
+// 字节量格式化: 将字节数格式化为带单位的可读值 (B/K/M/G), 保留一位小数,
+// 例如 21363 -> "20.9K", 1258291 -> "1.2M"。不足 1K 时按字节显示。
+// ----------------------------------------------------------------------------
+
+static void format_bytes(long long bytes, char* out, size_t out_size){
+    if(bytes >= 1024LL * 1024 * 1024){
+        std::snprintf(out, out_size, "%.1fG", bytes / (double)(1024LL * 1024 * 1024));
+    }else if(bytes >= 1024LL * 1024){
+        std::snprintf(out, out_size, "%.1fM", bytes / (double)(1024LL * 1024));
+    }else if(bytes >= 1024){
+        std::snprintf(out, out_size, "%.1fK", bytes / (double)1024);
+    }else{
+        std::snprintf(out, out_size, "%lld B", bytes);
+    }
+}
+
+// ----------------------------------------------------------------------------
 // 主流程
 // ----------------------------------------------------------------------------
 
@@ -555,8 +638,9 @@ int main(){
         int counter = 0;
         while(g_running.load()){
             std::this_thread::sleep_for(std::chrono::seconds(1));
-            if(++counter < g_config.stats_log_every) continue;
-            counter = 0;
+            load_log_control();
+            ++counter;
+
             size_t queued;
             {
                 std::lock_guard<std::mutex> lock(g_queue_mutex);
@@ -564,12 +648,26 @@ int main(){
             }
             long long wmax = 0, wmin = 0, wavg = 0, wcount = 0;
             packet_window_stats(wmax, wmin, wavg, wcount);
+
+            // 每秒写一次 status.json, 供 Web API 读取最新统计。
+            write_status_json(wmax, wmin, wavg, wcount, (long long)queued);
+
+            if(counter < g_config.stats_log_every) continue;
+            counter = 0;
+
+            char up[32], mx[32], mn[32], av[32];
+            format_bytes((long long)g_upload_bps.load(), up, sizeof(up));
+            format_bytes(wmax, mx, sizeof(mx));
+            format_bytes(wmin, mn, sizeof(mn));
+            format_bytes(wavg, av, sizeof(av));
             char buf[320];
             std::snprintf(buf, sizeof(buf),
-                "状态: 上行=%lld B/s 整形=%s 已拆包=%lld 待发分片=%zu | 近60秒单包: 最大=%lld B 最小=%lld B 平均=%lld B 包数=%lld",
-                (long long)g_upload_bps.load(), g_shaping.load() ? "是" : "否",
+                "状态: 上行=%s/s 整形=%s 已拆包=%lld 待发分片=%zu | 近60秒单包: 最大=%s 最小=%s 平均=%s 包数=%lld",
+                up, g_shaping.load() ? "是" : "否",
                 (long long)g_split_total.load(), queued,
-                wmax, wmin, wavg, wcount);
+                mx, mn, av, wcount);
+            // 终端日志开关: 静默时不向 stderr 输出 (网关侧即无该日志)。
+            if(g_stats_log_muted.load()) continue;
             log_stderr(buf);
         }
     });

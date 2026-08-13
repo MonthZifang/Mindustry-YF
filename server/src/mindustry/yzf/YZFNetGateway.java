@@ -17,13 +17,18 @@ import mindustry.game.EventType.PlayerChatEvent;
 import mindustry.game.EventType.PlayerJoin;
 import mindustry.game.EventType.PlayerLeave;
 import mindustry.gen.AnnounceCallPacket;
+import mindustry.gen.BlockSnapshotCallPacket;
 import mindustry.gen.Call;
+import mindustry.gen.ClientSnapshotCallPacket;
+import mindustry.gen.EntitySnapshotCallPacket;
 import mindustry.gen.Groups;
 import mindustry.gen.InfoMessageCallPacket;
 import mindustry.gen.Player;
 import mindustry.gen.SendChatMessageCallPacket;
 import mindustry.gen.SendMessageCallPacket;
+import mindustry.gen.StateSnapshotCallPacket;
 import mindustry.net.Packet;
+import mindustry.net.Packets;
 import mindustry.net.YZFNetworkMetrics;
 
 import java.io.BufferedReader;
@@ -39,6 +44,7 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -145,6 +151,12 @@ public final class YZFNetGateway{
     private final ConcurrentLinkedQueue<SplitChunk> pendingChunks = new ConcurrentLinkedQueue<>();
     // Packet counters per type (sampled into NetStatsEvent).
     private final ConcurrentHashMap<String, AtomicLong> packetCounters = new ConcurrentHashMap<>();
+    // Per-logical-packet size window: per-second samples kept for 60 seconds.
+    private final AtomicLong secondPacketMax = new AtomicLong();
+    private final AtomicLong secondPacketMin = new AtomicLong();
+    private final AtomicLong secondPacketCount = new AtomicLong();
+    private final AtomicLong secondPacketBytes = new AtomicLong();
+    private final ConcurrentLinkedDeque<long[]> packetSizeWindow = new ConcurrentLinkedDeque<>();
 
     // Async event queue (game thread -> dispatcher thread).
     private final ConcurrentLinkedQueue<String> dispatchQueue = new ConcurrentLinkedQueue<>();
@@ -787,6 +799,130 @@ public final class YZFNetGateway{
         return true;
     }
 
+    // ============================== netmod 终端日志开关 / 状态查询 / 启用禁用 ==============================
+
+    /** 模块目录内的终端状态日志控制文件；C++ 模块每秒读取，statsLog=false 时静默状态行输出。 */
+    private static final String NETMOD_LOG_CONTROL_FILE = "log-control.json";
+    /** 模块目录内的实时统计文件；C++ 模块每秒写入，供 Web UI 首页状态栏展示。 */
+    private static final String NETMOD_STATUS_FILE = "status.json";
+    /** status.json 超过该毫秒数未更新视为模块无心跳。 */
+    private static final long NETMOD_STATUS_STALE_MS = 15000;
+
+    /** 查询某模块终端状态日志是否静默（控制文件不存在或解析失败视为输出中）。 */
+    public boolean isNetModuleLogMuted(String moduleId){
+        NetModuleDefinition definition = netModules.find(d -> d.id.equals(moduleId));
+        if(definition == null) return false;
+        Fi control = definition.dir.child(NETMOD_LOG_CONTROL_FILE);
+        if(!control.exists()) return false;
+        try{
+            return !Jval.read(YZFText.readTextSmart(control)).getBool("statsLog", true);
+        }catch(Throwable ignored){
+            return false;
+        }
+    }
+
+    /** 开/关某模块（或 all）的终端状态日志输出。模块侧约 1 秒内生效。 */
+    public synchronized String setNetModuleLog(String moduleId, boolean statsLogOn){
+        if(YZFText.blank(moduleId)) return "用法: yzf net log <moduleId|all> <on|off|status>";
+        Seq<NetModuleDefinition> targets = new Seq<>();
+        if(moduleId.equalsIgnoreCase("all")){
+            targets.addAll(netModules);
+        }else{
+            NetModuleDefinition definition = netModules.find(d -> d.id.equalsIgnoreCase(moduleId));
+            if(definition != null) targets.add(definition);
+        }
+        if(targets.isEmpty()) return "未找到核心网络模块: " + moduleId;
+        Seq<String> changed = new Seq<>();
+        for(NetModuleDefinition definition : targets){
+            try{
+                definition.dir.child(NETMOD_LOG_CONTROL_FILE)
+                    .writeString("{\"statsLog\":" + statsLogOn + "}", false, "UTF-8");
+                changed.add(definition.id);
+            }catch(Throwable error){
+                Log.err("[NetGateway] 写入模块 @ 日志控制文件失败: @", definition.id, String.valueOf(error.getMessage()));
+            }
+        }
+        if(changed.isEmpty()) return "日志开关写入失败。";
+        return "终端状态日志已" + (statsLogOn ? "开启" : "静默") + ": " + String.join(", ", changed.toArray(String.class)) + "（约 1 秒内生效）";
+    }
+
+    /** 核心网络模块结构化状态（供 yzf net log status 与 Web UI /api/netmods 使用）。 */
+    public synchronized String netModulesStatusJson(){
+        long now = System.currentTimeMillis();
+        Jval modules = Jval.newArray();
+        synchronized(netModuleProcesses){
+            for(NetModuleDefinition definition : netModules){
+                boolean runningNow = false;
+                for(EmbeddedProcess process : netModuleProcesses){
+                    if(process.name.equals(definition.id) && process.process.isAlive()) runningNow = true;
+                }
+                Jval item = Jval.newObject();
+                item.put("id", definition.id);
+                item.put("name", definition.name);
+                item.put("version", definition.version);
+                item.put("priority", definition.priority);
+                item.put("enabled", definition.enabled);
+                item.put("running", runningNow);
+                item.put("hasBuild", hasBuildConfig(definition));
+                item.put("statsLog", !isNetModuleLogMuted(definition.id));
+                Fi statusFile = definition.dir.child(NETMOD_STATUS_FILE);
+                boolean fresh = statusFile.exists() && now - statusFile.lastModified() <= NETMOD_STATUS_STALE_MS;
+                item.put("online", fresh);
+                if(fresh){
+                    try{
+                        Jval stats = Jval.read(YZFText.readTextSmart(statusFile));
+                        item.put("timestamp", stats.getLong("timestamp", 0));
+                        item.put("uploadBps", stats.getLong("uploadBps", 0));
+                        item.put("shaping", stats.getBool("shaping", false));
+                        item.put("splitTotal", stats.getLong("splitTotal", 0));
+                        item.put("queuedChunks", stats.getLong("queuedChunks", 0));
+                        Jval window = stats.get("window60s");
+                        if(window != null && window.isObject()){
+                            Jval w = Jval.newObject();
+                            w.put("packetMax", window.getLong("packetMax", 0));
+                            w.put("packetMin", window.getLong("packetMin", 0));
+                            w.put("packetAvg", window.getLong("packetAvg", 0));
+                            w.put("packetCount", window.getLong("packetCount", 0));
+                            item.put("window60s", w);
+                        }
+                    }catch(Throwable ignored){
+                        item.put("online", false);
+                    }
+                }
+                modules.add(item);
+            }
+        }
+        Jval root = Jval.newObject();
+        root.put("ok", true);
+        root.put("running", running.get());
+        root.put("dir", paths.root.child(netmodsDirName).absolutePath());
+        root.put("modules", modules);
+        return root.toString(Jval.Jformat.plain);
+    }
+
+    /** 启用或禁用核心网络模块：更新 netmodule.hjson 的 enabled 字段并立即启停。 */
+    public synchronized String setNetModuleEnabled(String moduleId, boolean enable){
+        if(YZFText.blank(moduleId)) return "用法: yzf net enable|disable <moduleId>";
+        NetModuleDefinition definition = netModules.find(d -> d.id.equalsIgnoreCase(moduleId));
+        if(definition == null) return "未找到核心网络模块: " + moduleId;
+        if(definition.enabled == enable) return "模块 " + moduleId + (enable ? " 已处于启用状态。" : " 已处于禁用状态。");
+        try{
+            Jval meta = Jval.read(YZFText.readTextSmart(definition.dir.child("netmodule.hjson")));
+            meta.put("enabled", enable);
+            definition.dir.child("netmodule.hjson").writeString(meta.toString(Jval.Jformat.plain), false, "UTF-8");
+        }catch(Throwable error){
+            return "更新 netmodule.hjson 失败: " + error.getMessage();
+        }
+        definition.enabled = enable;
+        if(enable){
+            startNetModuleWithBuild(definition, true);
+            return "已启用并启动核心网络模块: " + moduleId;
+        }else{
+            boolean stopped = stopNetModuleProcess(definition.id);
+            return "已禁用核心网络模块: " + moduleId + (stopped ? "（进程已停止）" : "（未运行）");
+        }
+    }
+
     // ============================== netmod file-watch hot reload / hot build ==============================
 
     /** File extensions that count as build-relevant sources (trigger a hot compile). */
@@ -1183,6 +1319,10 @@ public final class YZFNetGateway{
     /**
      * Core network module management over HTTP (used by build scripts and ops tooling):
      *   GET/POST /yzfnet/netmods            - list modules with live process state
+     *   GET      /yzfnet/netmods/status     - structured module status (incl. status.json stats)
+     *   POST     /yzfnet/netmods/log        - toggle terminal status log (body: {"id":"...|all","statsLog":bool})
+     *   POST     /yzfnet/netmods/enable     - enable a module (body: {"id":"..."})
+     *   POST     /yzfnet/netmods/disable    - disable a module (body: {"id":"..."})
      *   POST     /yzfnet/netmods/stop       - stop a module (body: {"id":"..."}), releases the
      *                                          Windows exe lock so the build script can replace it
      *   POST     /yzfnet/netmods/restart    - restart a module (body: {"id":"..."|"all"})
@@ -1192,17 +1332,31 @@ public final class YZFNetGateway{
     private String handleNetModEndpoint(String path, HttpExchange exchange) throws IOException{
         if(!path.startsWith("/yzfnet/netmods")) return null;
         String id = "";
+        boolean statsLog = true;
         try{
             String body = readBody(exchange);
             if(!YZFText.blank(body)){
                 Jval root = Jval.read(body);
                 id = root.getString("id", "").trim();
+                statsLog = root.getBool("statsLog", true);
             }
         }catch(Throwable ignored){
         }
         switch(path){
             case "/yzfnet/netmods" -> {
                 return "{\"ok\":true,\"info\":\"" + escape(listNetModules().replace('\n', '|')) + "\"}";
+            }
+            case "/yzfnet/netmods/status" -> {
+                return netModulesStatusJson();
+            }
+            case "/yzfnet/netmods/log" -> {
+                return "{\"ok\":true,\"message\":\"" + escape(setNetModuleLog(YZFText.blank(id) ? "all" : id, statsLog)) + "\"}";
+            }
+            case "/yzfnet/netmods/enable" -> {
+                return "{\"ok\":true,\"message\":\"" + escape(setNetModuleEnabled(id, true)) + "\"}";
+            }
+            case "/yzfnet/netmods/disable" -> {
+                return "{\"ok\":true,\"message\":\"" + escape(setNetModuleEnabled(id, false)) + "\"}";
             }
             case "/yzfnet/netmods/stop" -> {
                 return "{\"ok\":true,\"message\":\"" + escape(stopNetModule(id)) + "\"}";
