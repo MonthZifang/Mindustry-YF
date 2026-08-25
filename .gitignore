@@ -181,5 +181,16 @@ core/assets-raw/sprites/ui/sectors/*.json
 
 
 
+# AI & Agent config
+.claude/
+**/.claude/
+
+# C/C++ compiled binaries
+*.obj
+*.exe
+
 # 重要即屏蔽
+server/build/
 server/build/libs/
+**/server/build/libs/
+**/server/build/libs/**

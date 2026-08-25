@@ -14,6 +14,8 @@
 @rem limitations under the License.
 @rem
 
+chcp 65001
+
 @if "%DEBUG%" == "" @echo off
 @rem ##########################################################################
 @rem

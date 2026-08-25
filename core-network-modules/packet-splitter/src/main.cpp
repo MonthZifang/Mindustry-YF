@@ -3,11 +3,12 @@
 // ----------------------------------------------------------------------------
 // 功能:
 //   1. 监测服务端实时上行带宽 (NetStatsEvent, 每秒一次)。
-//   2. 当上行带宽超过阈值时进入"整形模式", 收紧拆包参数并对突发包限速,
-//      避免瞬间大包冲击带宽造成卡顿/掉线/不同步。
+//   2. 当上行带宽超过阈值时进入"整形模式", 收紧文本消息拆包参数,
+//      避免单条超长文本瞬间冲击带宽。
 //   3. 收到 SplitRequest 事件 (网关取消了超长消息包) 后, 把消息切成小包,
 //      按固定节奏逐个发回网关 (split.send), 平滑突发流量。
-//   4. 所有参数可通过本目录 config.hjson 调整; 模块崩溃会被网关自动重启。
+//   4. 游戏数据包和状态同步包的字节分片由服务端连接层完成; 本模块不丢包。
+//   5. 所有参数可通过本目录 config.hjson 调整; 模块崩溃会被网关自动重启。
 //
 // 协议: NDJSON over stdin/stdout (YZF_GATEWAY=netgateway)。
 // 依赖: 仅 C++17 标准库, 无第三方依赖。
@@ -187,11 +188,6 @@ struct Config{
     int shaped_chunk_size = 80;     // 整形模式下的分片大小
     int shaped_interval_ms = 100;   // 整形模式下的分片间隔
 
-    // 突发抑制: 整形模式下对大流量包类型限速 (包/秒)
-    int burst_limit_snapshot = 25;  // BlockSnapshotCallPacket 限速
-    int burst_limit_sync = 30;      // SyncCallPacket 限速
-    bool burst_control = true;
-
     int stats_log_every = 30;       // 每 N 秒向 stderr 打印一次状态
 };
 
@@ -208,7 +204,6 @@ static std::mutex g_queue_mutex;
 static std::atomic<bool> g_shaping{false};
 static std::atomic<long long> g_upload_bps{0};
 static std::atomic<long long> g_split_total{0};
-static std::atomic<bool> g_burst_rules_sent{false};
 static std::atomic<bool> g_running{true};
 static std::atomic<long long> g_pending_chunks{0};
 // 终端状态日志开关: true = 静默 (不向 stderr 输出状态行)。
@@ -378,11 +373,6 @@ static void load_local_config(){
     get_int("shapedThreshold", g_config.shaped_threshold);
     get_int("shapedChunkSize", g_config.shaped_chunk_size);
     get_int("shapedIntervalMs", g_config.shaped_interval_ms);
-    get_int("burstLimitSnapshot", g_config.burst_limit_snapshot);
-    get_int("burstLimitSync", g_config.burst_limit_sync);
-    int burst = g_config.burst_control ? 1 : 0;
-    get_int("burstControl", burst);
-    g_config.burst_control = (burst != 0);
     get_int("statsLogEvery", g_config.stats_log_every);
     log_stderr("已加载本地配置 config.hjson");
 }
@@ -395,7 +385,7 @@ static void apply_shaping(bool shaping){
     if(g_shaping.exchange(shaping) == shaping) return;
 
     if(shaping){
-        log_stderr("带宽压力升高, 进入整形模式 (收紧拆包参数 + 突发限速)");
+        log_stderr("带宽压力升高, 进入文本消息整形模式");
     }else{
         log_stderr("带宽压力回落, 退出整形模式 (恢复常规拆包参数)");
     }
@@ -410,17 +400,13 @@ static void apply_shaping(bool shaping){
         threshold, chunk, interval);
     send_line(buf);
 
-    if(shaping && g_config.burst_control && !g_burst_rules_sent.exchange(true)){
-        std::snprintf(buf, sizeof(buf),
-            "{\"type\":\"rateLimit\",\"fields\":{\"event\":\"send\",\"packet\":\"BlockSnapshotCallPacket\",\"perSecond\":\"%d\",\"burst\":\"%d\"}}",
-            g_config.burst_limit_snapshot, g_config.burst_limit_snapshot);
-        send_line(buf);
-        std::snprintf(buf, sizeof(buf),
-            "{\"type\":\"rateLimit\",\"fields\":{\"event\":\"send\",\"packet\":\"SyncCallPacket\",\"perSecond\":\"%d\",\"burst\":\"%d\"}}",
-            g_config.burst_limit_sync, g_config.burst_limit_sync);
-        send_line(buf);
-        log_stderr("已下发突发限速规则 (BlockSnapshot/Sync)");
-    }
+}
+
+// 旧版本曾按包数丢弃方块快照和同步包。规则保存在网关进程中，升级后
+// 必须显式删除，确保游戏数据统一交给连接层按字节排队发送。
+static void clear_legacy_packet_drop_rules(){
+    send_line("{\"type\":\"rateLimit\",\"fields\":{\"event\":\"send\",\"packet\":\"BlockSnapshotCallPacket\",\"perSecond\":\"0\",\"burst\":\"0\"}}");
+    send_line("{\"type\":\"rateLimit\",\"fields\":{\"event\":\"send\",\"packet\":\"SyncCallPacket\",\"perSecond\":\"0\",\"burst\":\"0\"}}");
 }
 
 // ----------------------------------------------------------------------------
@@ -586,13 +572,14 @@ static void handle_line(const std::string& line){
             // 订阅拆包委托与带宽统计。
             send_line("{\"type\":\"subscribe\",\"fields\":{\"event\":\"SplitRequest\"}}");
             send_line("{\"type\":\"subscribe\",\"fields\":{\"event\":\"NetStatsEvent\"}}");
+            clear_legacy_packet_drop_rules();
             // 以 external 模式接管拆包决策。
             char buf[256];
             std::snprintf(buf, sizeof(buf),
                 "{\"type\":\"splitPolicy\",\"fields\":{\"mode\":\"external\",\"threshold\":\"%d\",\"chunkSize\":\"%d\",\"intervalMs\":\"%d\"}}",
                 g_config.split_threshold, g_config.split_chunk_size, g_config.split_interval_ms);
             send_line(buf);
-            log_stderr("已接管大包拆分 (external 模式)");
+            log_stderr("已接管超长文本消息拆分 (external 模式), 已清除旧状态包丢弃规则");
         }
     }else if(type == "shutdown"){
         g_running.store(false);

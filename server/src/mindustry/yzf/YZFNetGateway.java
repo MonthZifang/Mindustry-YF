@@ -13,6 +13,7 @@ import arc.util.serialization.Jval;
 import mindustry.Vars;
 import mindustry.events.ReceivePacketEvent;
 import mindustry.events.SendPacketEvent;
+import mindustry.events.SendStreamEvent;
 import mindustry.game.EventType.PlayerChatEvent;
 import mindustry.game.EventType.PlayerJoin;
 import mindustry.game.EventType.PlayerLeave;
@@ -27,6 +28,7 @@ import mindustry.gen.Player;
 import mindustry.gen.SendChatMessageCallPacket;
 import mindustry.gen.SendMessageCallPacket;
 import mindustry.gen.StateSnapshotCallPacket;
+import mindustry.net.NetConnection;
 import mindustry.net.Packet;
 import mindustry.net.Packets;
 import mindustry.net.YZFNetworkMetrics;
@@ -112,6 +114,12 @@ public final class YZFNetGateway{
     private volatile int splitChunksPerTick = 4;    // max chunks dispatched per tick (internal mode)
     private volatile boolean netmodsAutoRestart = true;
 
+    // Full control mode: when true, the gateway intercepts/cancels all send &
+    // receive packets and forwards every packet event to external core modules,
+    // which become responsible for re-emitting or modifying them. State-sync and
+    // world/map traffic are also routed through the gateway for full takeover.
+    private volatile boolean fullControl = false;
+
     // Runtime state
     private HttpServer httpServer;
     private ServerSocket tcpServerSocket;
@@ -167,6 +175,17 @@ public final class YZFNetGateway{
     private final AtomicLong splitPackets = new AtomicLong();
     private final AtomicLong rateLimitedPackets = new AtomicLong();
 
+    // ---- Traffic Shaping & Splitting (merged unified rules) ----
+    // Global switch; when false, no player is shaped/split by policy.
+    private volatile boolean trafficPolicyEnabled;
+    // Global default settings (fallback).
+    private volatile TrafficSettings defaultSettings = new TrafficSettings();
+    // Per-player overrides: UUID -> settings.
+    private final ConcurrentHashMap<String, TrafficSettings> playerSettings = new ConcurrentHashMap<>();
+    // These computed TrafficRules are kept for backwards-compatible status display.
+    private volatile TrafficRule defaultTrafficRule = new TrafficRule(true, 1024L * 1024L, 1024, 100);
+    private final ConcurrentHashMap<String, TrafficRule> playerTrafficRules = new ConcurrentHashMap<>();
+
     private Timer.Task statsTask;
     private Timer.Task chunkTask;
     private Timer.Task netmodRestartTask;
@@ -177,6 +196,7 @@ public final class YZFNetGateway{
     private Cons<PlayerChatEvent> chatHandler;
     private Cons<PlayerJoin> joinHandler;
     private Cons<PlayerLeave> leaveHandler;
+    private Cons<SendStreamEvent> streamHandler;
 
     public YZFNetGateway(YZFPaths paths, mindustry.server.ServerControl serverControl){
         this.paths = paths;
@@ -256,6 +276,7 @@ public final class YZFNetGateway{
         if(statsTask != null){ statsTask.cancel(); statsTask = null; }
         if(chunkTask != null){ chunkTask.cancel(); chunkTask = null; }
         if(netmodRestartTask != null){ netmodRestartTask.cancel(); netmodRestartTask = null; }
+        disableTrafficPolicies();
 
         if(httpServer != null){
             httpServer.stop(0);
@@ -291,6 +312,7 @@ public final class YZFNetGateway{
         if(chatHandler != null){ Events.remove(PlayerChatEvent.class, chatHandler); chatHandler = null; }
         if(joinHandler != null){ Events.remove(PlayerJoin.class, joinHandler); joinHandler = null; }
         if(leaveHandler != null){ Events.remove(PlayerLeave.class, leaveHandler); leaveHandler = null; }
+        if(streamHandler != null){ Events.remove(SendStreamEvent.class, streamHandler); streamHandler = null; }
         dispatchQueue.clear();
         dispatchQueueSize.set(0);
         pendingChunks.clear();
@@ -321,6 +343,9 @@ public final class YZFNetGateway{
             .append(" 阈值=").append(splitThreshold).append(" 分片=").append(splitChunkSize)
             .append(" 间隔=").append(splitIntervalMs).append("ms").append('\n');
         builder.append("限速规则: ").append(rateBuckets.size()).append(" 条").append('\n');
+        builder.append("玩家流量整形: ").append(trafficPolicyEnabled ? "启用" : "禁用")
+            .append(" 默认=").append(defaultSettings.maxUpload).append(" B/min (0=无限)")
+            .append(" 单独覆盖=").append(playerSettings.size()).append(" 条").append('\n');
         builder.append("观察开关: 发送=").append(observeSend).append(" 接收=").append(observeReceive)
             .append(" 聊天=").append(observeChat).append(" 进出=").append(observeJoins).append('\n');
         builder.append("丢包过滤器: ").append(dropFilters.size).append(" 条").append('\n');
@@ -364,7 +389,10 @@ public final class YZFNetGateway{
                 "netmods: { dir: \"netmods\", autoRestart: true, hotReload: true }\n" +
                 "splitPolicy: { mode: \"internal\", threshold: 200, chunkSize: 100, intervalMs: 60, chunksPerTick: 4 }\n" +
                 "token: \"\"\n" +
-                "observe: { sendPackets: false, receivePackets: true, chat: true, joins: true }\n"
+                "observe: { sendPackets: false, receivePackets: true, chat: true, joins: true }\n" +
+                "# fullControl: true 时，网关拦截所有收发包，全部转发给外部模块处理。\n" +
+                "# 外部模块需要处理所有游戏数据包（包括地图更新、状态同步等）。\n" +
+                "fullControl: false\n"
             );
         }
 
@@ -376,12 +404,14 @@ public final class YZFNetGateway{
         splitMode = "off"; splitThreshold = 200; splitChunkSize = 100; splitIntervalMs = 60; splitChunksPerTick = 4;
         netmodsAutoRestart = true;
         netmodsHotReload = true;
+        fullControl = false;
         String netmodsDir = "netmods";
         processDefinitions.clear();
 
         try{
             Jval root = Jval.read(YZFText.readTextSmart(file));
             enabled = root.getBool("enabled", true);
+            fullControl = root.getBool("fullControl", false);
             Jval http = root.get("http");
             if(http != null && http.isObject()){
                 httpEnabled = http.getBool("enabled", true);
@@ -1380,6 +1410,19 @@ public final class YZFNetGateway{
             if(event == null || event.packet == null) return;
             String name = packetName(event.packet);
             countPacket("S:" + name);
+
+            // Full control mode: cancel all send packets, external modules
+            // are responsible for re-emitting them via the gateway.
+            if(fullControl){
+                event.isCancelled = true;
+                if(observeSend){
+                    enqueueEvent("SendPacketEvent", "\"packet\":\"" + escape(name) + "\""
+                        + ",\"connection\":\"" + escape(event.con == null ? "*" : connLabel(event.con)) + "\""
+                        + ",\"except\":\"" + escape(event.except == null ? "" : connLabel(event.except)) + "\"");
+                }
+                return;
+            }
+
             if(dropFilters.contains("S:" + name)){
                 event.isCancelled = true;
                 return;
@@ -1403,6 +1446,18 @@ public final class YZFNetGateway{
             if(event == null || event.packet == null) return;
             String name = packetName(event.packet);
             countPacket("R:" + name);
+
+            // Full control mode: cancel all receive packets, external modules
+            // handle them.
+            if(fullControl){
+                event.isCancelled = true;
+                if(observeReceive){
+                    enqueueEvent("ReceivePacketEvent", "\"packet\":\"" + escape(name) + "\""
+                        + ",\"connection\":\"" + escape(event.con == null ? "?" : connLabel(event.con)) + "\"");
+                }
+                return;
+            }
+
             if(dropFilters.contains("R:" + name)){
                 event.isCancelled = true;
                 return;
@@ -1490,20 +1545,21 @@ public final class YZFNetGateway{
 
     /** Returns true if the packet was split and the original should be cancelled. */
     private boolean trySplit(SendPacketEvent event, String packetName){
-        if("off".equals(splitMode)) return false;
+        TrafficSettings s = resolveSplitSettings(event.con);
+        if(s == null || "off".equals(s.splitMode)) return false;
         String message = extractMessage(event.packet);
-        if(message == null || message.length() < splitThreshold) return false;
+        if(message == null || message.length() < s.splitThreshold) return false;
 
         event.isCancelled = true;
         splitPackets.incrementAndGet();
 
-        if("external".equals(splitMode)){
+        if("external".equals(s.splitMode)){
             // Delegate chunking to an external core module / TCP client.
             String kind = splitKind(event.packet);
             enqueueEvent("SplitRequest", "\"packet\":\"" + escape(packetName) + "\""
                 + ",\"kind\":\"" + escape(kind) + "\""
                 + ",\"length\":" + message.length()
-                + ",\"chunkSize\":" + splitChunkSize
+                + ",\"chunkSize\":" + s.splitChunkSize
                 + ",\"message\":\"" + escape(message) + "\"");
             return true;
         }
@@ -1512,15 +1568,23 @@ public final class YZFNetGateway{
         String kind = splitKind(event.packet);
         int start = 0;
         int index = 0;
-        int total = (message.length() + splitChunkSize - 1) / splitChunkSize;
+        int total = (message.length() + s.splitChunkSize - 1) / s.splitChunkSize;
         while(start < message.length()){
-            int end = Math.min(message.length(), start + splitChunkSize);
+            int end = Math.min(message.length(), start + s.splitChunkSize);
             String chunk = message.substring(start, end);
             pendingChunks.offer(new SplitChunk(kind, chunk, index, total));
             start = end;
             index++;
         }
         return true;
+    }
+
+    /** Resolve the TrafficSettings for a given connection (or null for broadcast). */
+    private TrafficSettings resolveSplitSettings(NetConnection con){
+        if(con == null) return defaultSettings; // broadcast
+        String uuid = normalizeUuid(con.uuid);
+        TrafficSettings s = playerSettings.get(uuid);
+        return s != null ? s : defaultSettings;
     }
 
     private String splitKind(Object packet){
@@ -1582,6 +1646,7 @@ public final class YZFNetGateway{
         if(statsTask != null) return;
         statsTask = Timer.schedule(() -> {
             if(!running.get()) return;
+            applyTrafficPolicies();
             YZFNetworkMetrics.sampleNow();
             StringBuilder fields = new StringBuilder();
             fields.append("\"uploadBps\":").append(YZFNetworkMetrics.currentUploadBps())
@@ -1600,7 +1665,116 @@ public final class YZFNetGateway{
                 fields.append(",\"topPackets\":").append(top);
             }
             enqueueEvent("NetStatsEvent", fields.toString());
+            enqueueEvent("TrafficStatsEvent", trafficStatsFieldsJson());
         }, 1f, 1f);
+    }
+
+    private void applyTrafficPolicies(){
+        if(Vars.net == null) return;
+        if(!trafficPolicyEnabled) return;
+        for(NetConnection connection : Vars.net.getConnections()){
+            String uuid = normalizeUuid(connection.uuid);
+            TrafficSettings s = playerSettings.get(uuid);
+            if(s == null) s = defaultSettings;
+            // 0 = unlimited: no shaping
+            if(s.maxUpload <= 0 || !s.enabled){
+                connection.configureTrafficShaping(false, 1024L * 1024L, 1024, 100);
+                continue;
+            }
+            // Use per-player or default connection shaping parameters
+            int cb = s.chunkBytes;
+            int im = s.intervalMs;
+            connection.configureTrafficShaping(true, s.maxUpload, cb, im);
+        }
+    }
+
+    private void disableTrafficPolicies(){
+        if(Vars.net == null) return;
+        for(NetConnection connection : Vars.net.getConnections()){
+            connection.configureTrafficShaping(false, 1024L * 1024L, 1024, 100);
+        }
+    }
+
+    private String trafficStatsFieldsJson(){
+        StringBuilder builder = new StringBuilder("\"timestamp\":")
+            .append(System.currentTimeMillis())
+            .append(",\"defaultMaxUpload\":").append(defaultSettings.maxUpload)
+            .append(",\"defaultChunkBytes\":").append(defaultSettings.chunkBytes)
+            .append(",\"defaultSplitMode\":\"").append(escape(defaultSettings.splitMode)).append('"')
+            .append(",\"connections\":[");
+        boolean first = true;
+        if(Vars.net != null){
+            for(NetConnection connection : Vars.net.getConnections()){
+                if(!first) builder.append(',');
+                first = false;
+                String uuid = normalizeUuid(connection.uuid);
+                TrafficSettings s = playerSettings.get(uuid);
+                boolean hasOverride = s != null;
+                if(s == null) s = defaultSettings;
+                Player player = connection.player;
+                builder.append('{')
+                    .append("\"address\":\"").append(escape(connection.address)).append('"')
+                    .append(",\"uuid\":\"").append(escape(uuid)).append('"')
+                    .append(",\"name\":\"").append(escape(player == null ? "" : player.name)).append('"')
+                    .append(",\"online\":").append(connection.isConnected())
+                    .append(",\"override\":").append(hasOverride)
+                    .append(",\"maxUpload\":").append(s.maxUpload)
+                    .append(",\"chunkBytes\":").append(s.chunkBytes)
+                    .append(",\"intervalMs\":").append(s.intervalMs)
+                    .append(",\"splitMode\":\"").append(escape(s.splitMode)).append('"')
+                    .append(",\"splitThreshold\":").append(s.splitThreshold)
+                    .append(",\"splitChunkSize\":").append(s.splitChunkSize)
+                    .append(",\"shaping\":").append(connection.trafficShapingEnabled())
+                    .append(",\"bytesPerMinute\":").append(connection.trafficBytesPerMinute())
+                    .append(",\"effectiveChunkBytes\":").append(connection.trafficEffectiveChunkBytes())
+                    .append(",\"queuedBytes\":").append(connection.trafficQueuedBytes())
+                    .append(",\"queuedPackets\":").append(connection.trafficQueuedPackets())
+                    .append(",\"sentBytes\":").append(connection.trafficBytesSent())
+                    .append(",\"sentPackets\":").append(connection.trafficSentPackets())
+                    .append(",\"receivedPackets\":").append(connection.trafficReceivedPackets())
+                    .append(",\"chunksSent\":").append(connection.trafficChunksSent())
+                    .append(",\"splitPackets\":").append(connection.trafficSplitPackets())
+                    .append(",\"coalescedPackets\":").append(connection.trafficCoalescedPackets())
+                    .append(",\"droppedUnreliablePackets\":").append(connection.trafficDroppedUnreliablePackets())
+                    .append(",\"lastActivity\":").append(connection.trafficLastActivityMillis())
+                    .append('}');
+            }
+        }
+        return builder.append(']').toString();
+    }
+
+    /** Returns the current unified traffic policy as JSON (for the config UI). */
+    private String currentPolicyJson(){
+        StringBuilder out = new StringBuilder("{\"ok\":true,\"enabled\":").append(trafficPolicyEnabled)
+            .append(",\"defaults\":{")
+            .append("\"maxUpload\":").append(defaultSettings.maxUpload)
+            .append(",\"chunkBytes\":").append(defaultSettings.chunkBytes)
+            .append(",\"intervalMs\":").append(defaultSettings.intervalMs)
+            .append(",\"splitMode\":\"").append(escape(defaultSettings.splitMode)).append('"')
+            .append(",\"splitThreshold\":").append(defaultSettings.splitThreshold)
+            .append(",\"splitChunkSize\":").append(defaultSettings.splitChunkSize)
+            .append(",\"splitIntervalMs\":").append(defaultSettings.splitIntervalMs)
+            .append(",\"splitChunksPerTick\":").append(defaultSettings.splitChunksPerTick)
+            .append("},\"players\":{");
+        boolean first = true;
+        for(var entry : playerSettings.entrySet()){
+            if(!first) out.append(',');
+            first = false;
+            TrafficSettings s = entry.getValue();
+            out.append('"').append(escape(entry.getKey())).append("\":{")
+                .append("\"enabled\":").append(s.enabled)
+                .append(",\"maxUpload\":").append(s.maxUpload)
+                .append(",\"chunkBytes\":").append(s.chunkBytes)
+                .append(",\"intervalMs\":").append(s.intervalMs)
+                .append(",\"splitMode\":\"").append(escape(s.splitMode)).append('"')
+                .append(",\"splitThreshold\":").append(s.splitThreshold)
+                .append(",\"splitChunkSize\":").append(s.splitChunkSize)
+                .append(",\"splitIntervalMs\":").append(s.splitIntervalMs)
+                .append(",\"splitChunksPerTick\":").append(s.splitChunksPerTick)
+                .append('}');
+        }
+        out.append("}}");
+        return out.toString();
     }
 
     private String topPacketsJson(){
@@ -1703,6 +1877,229 @@ public final class YZFNetGateway{
 
     // ============================== HTTP transport ==============================
 
+    private static final String DASHBOARD_HTML = """
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+        <meta charset="utf-8">
+        <title>YZF 流量监控与限速看板</title>
+        <style>
+          body { background:#111; color:#eee; font-family:system-ui,sans-serif; padding:20px; }
+          h1 { color:#4fc3f7; }
+          h2 { color:#81c784; margin-top:32px; border-bottom:1px solid #333; padding-bottom:6px; }
+          table { border-collapse:collapse; width:100%; margin-top:12px; }
+          th,td { border:1px solid #333; padding:6px 10px; text-align:left; font-size:13px; }
+          th { background:#222; color:#4fc3f7; }
+          tr:nth-child(even) { background:#161616; }
+          .up { color:#81c784; }
+          input,select { padding:6px 8px; border-radius:6px; border:1px solid #555; background:#222; color:#eee; margin:2px; }
+          button { padding:8px 16px; border-radius:6px; border:0; cursor:pointer; margin:4px; }
+          .btn-primary { background:#4fc3f7; color:#111; }
+          .btn-danger { background:#e57373; color:#111; }
+          .btn-ghost { background:#444; color:#eee; }
+          .section { background:#181818; border:1px solid #2a2a2a; border-radius:10px; padding:16px; margin-top:16px; }
+          .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; }
+          label { font-size:12px; color:#999; display:block; margin-top:6px; }
+          .status { padding:4px 10px; border-radius:4px; display:inline-block; font-size:12px; }
+          .on { background:#2e7d32; }
+          .off { background:#777; }
+        </style>
+        </head>
+        <body>
+        <h1>YZF 流量监控与限速看板</h1>
+        <p>上行速度 = 每秒采样 sentBytes 增量。0 表示无限/未限制。以下全局与单玩家规则已合并到同一界面，可统一编辑。</p>
+
+        <h2>📊 实时上行监控</h2>
+        <div><input id="search" placeholder="搜索玩家名 / UUID / IP" style="width:320px"></div>
+        <table id="tbl">
+          <thead><tr>
+            <th>玩家</th><th>UUID</th><th>IP</th><th>限速(字节/分)</th><th>分片(字节)</th><th>间隔(ms)</th>
+            <th>已发送(字节)</th><th class="up">上行速度(字节/秒)</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+
+        <div class="section">
+          <h2>⚙️ 限速与分片规则（全局 + 单玩家 统一管理）</h2>
+          <div class="grid" id="defaultsForm">
+            <div>
+              <label>全局 最大上传 (字节/分, 0=无限)</label>
+              <input id="d_maxUpload" type="number" min="0" value="1048576">
+            </div>
+            <div>
+              <label>全局 连接分片大小 (字节)</label>
+              <input id="d_chunkBytes" type="number" min="32" value="1024">
+            </div>
+            <div>
+              <label>全局 分片间隔 (ms)</label>
+              <input id="d_intervalMs" type="number" min="1" value="100">
+            </div>
+            <div>
+              <label>全局 文本分片模式</label>
+              <select id="d_splitMode"><option value="internal">internal</option><option value="external">external</option><option value="off">off</option></select>
+            </div>
+            <div>
+              <label>文本分片阈值 (字符)</label>
+              <input id="d_splitThreshold" type="number" min="16" value="200">
+            </div>
+            <div>
+              <label>文本分片大小 (字符)</label>
+              <input id="d_splitChunkSize" type="number" min="16" value="100">
+            </div>
+            <div>
+              <label>文本分片间隔 (ms)</label>
+              <input id="d_splitIntervalMs" type="number" min="5" value="60">
+            </div>
+            <div>
+              <label>每 tick 分片数</label>
+              <input id="d_splitChunksPerTick" type="number" min="1" value="4">
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>👤 单玩家覆盖规则</h2>
+          <p>留空的字段自动继承全局默认。设置 maxUpload=0 表示该玩家不限制。</p>
+          <table id="playersTbl">
+            <thead><tr>
+              <th>UUID</th><th>启用</th><th>最大上传(字节/分)</th><th>分片(字节)</th><th>间隔(ms)</th><th>文本分片模式</th><th>操作</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+          <div style="margin-top:10px;">
+            <input id="newPlayerUuid" placeholder="玩家 UUID" style="width:260px">
+            <input id="newPlayerMax" type="number" min="0" placeholder="最大上传(0=无限)" style="width:150px">
+            <button class="btn-ghost" onclick="addPlayerRow()">＋ 添加玩家</button>
+          </div>
+          <div style="margin-top:16px;">
+            <button class="btn-primary" onclick="savePolicy()">💾 保存规则</button>
+            <button class="btn-ghost" onclick="loadPolicy()">🔄 重新加载</button>
+          </div>
+        </div>
+
+        <script>
+        let prev = {};
+        let playerRows = [];
+
+        async function refresh(){
+          try{
+            const r = await fetch('/yzfnet/traffic');
+            const j = await r.json();
+            const now = Date.now();
+            const tbody = document.querySelector('#tbl tbody');
+            const search = document.getElementById('search').value.trim().toLowerCase();
+            tbody.innerHTML = '';
+            for(const c of (j.connections || [])){
+              if(search && !(c.name||'').toLowerCase().includes(search) && !(c.uuid||'').toLowerCase().includes(search) && !(c.address||'').toLowerCase().includes(search)) continue;
+              const key = c.uuid || c.address;
+              const p = prev[key];
+              let bps = 0;
+              if(p && now - p.t > 0){
+                bps = Math.max(0, Math.round((c.sentBytes - p.sent) * 1000 / (now - p.t)));
+              }
+              prev[key] = { sent: c.sentBytes, t: now };
+              const tr = document.createElement('tr');
+              tr.innerHTML = '<td>' + (c.name||'?') + '</td><td>' + (c.uuid||'') + '</td><td>' + (c.address||'') + '</td>'
+                + '<td>' + (c.maxUpload ?? 0) + '</td><td>' + (c.chunkBytes ?? 0) + '</td><td>' + (c.intervalMs ?? 0) + '</td>'
+                + '<td>' + (c.sentBytes||0) + '</td><td class="up">' + bps + '</td>';
+              tbody.appendChild(tr);
+            }
+          }catch(e){ console.error(e); }
+        }
+
+        async function loadPolicy(){
+          try{
+            const r = await fetch('/yzfnet/policy');
+            const j = await r.json();
+            if(!j.ok) return;
+            document.getElementById('d_maxUpload').value = j.defaults.maxUpload;
+            document.getElementById('d_chunkBytes').value = j.defaults.chunkBytes;
+            document.getElementById('d_intervalMs').value = j.defaults.intervalMs;
+            document.getElementById('d_splitMode').value = j.defaults.splitMode;
+            document.getElementById('d_splitThreshold').value = j.defaults.splitThreshold;
+            document.getElementById('d_splitChunkSize').value = j.defaults.splitChunkSize;
+            document.getElementById('d_splitIntervalMs').value = j.defaults.splitIntervalMs;
+            document.getElementById('d_splitChunksPerTick').value = j.defaults.splitChunksPerTick;
+            playerRows = [];
+            for(const [uuid, s] of Object.entries(j.players || {})){
+              playerRows.push({ uuid, enabled: s.enabled, maxUpload: s.maxUpload, chunkBytes: s.chunkBytes, intervalMs: s.intervalMs, splitMode: s.splitMode });
+            }
+            renderPlayers();
+          }catch(e){ console.error(e); }
+        }
+
+        function renderPlayers(){
+          const tbody = document.querySelector('#playersTbl tbody');
+          tbody.innerHTML = '';
+          playerRows.forEach((p, i) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td><input value="' + (p.uuid||'') + '" onchange="playerRows[' + i + '].uuid=this.value" style="width:220px"></td>'
+              + '<td><input type="checkbox" ' + (p.enabled?'checked':'') + ' onchange="playerRows[' + i + '].enabled=this.checked"></td>'
+              + '<td><input type="number" min="0" value="' + (p.maxUpload??0) + '" style="width:130px" onchange="playerRows[' + i + '].maxUpload=+this.value"></td>'
+              + '<td><input type="number" min="0" value="' + (p.chunkBytes??0) + '" style="width:100px" onchange="playerRows[' + i + '].chunkBytes=+this.value"></td>'
+              + '<td><input type="number" min="0" value="' + (p.intervalMs??0) + '" style="width:100px" onchange="playerRows[' + i + '].intervalMs=+this.value"></td>'
+              + '<td><select onchange="playerRows[' + i + '].splitMode=this.value">'
+              + '<option value="internal"' + (p.splitMode==='internal'?' selected':'') + '>internal</option>'
+              + '<option value="external"' + (p.splitMode==='external'?' selected':'') + '>external</option>'
+              + '<option value="off"' + (p.splitMode==='off'?' selected':'') + '>off</option>'
+              + '</select></td>'
+              + '<td><button class="btn-danger" onclick="playerRows.splice(' + i + ',1);renderPlayers()">删除</button></td>';
+            tbody.appendChild(tr);
+          });
+        }
+
+        function addPlayerRow(){
+          const uuid = document.getElementById('newPlayerUuid').value.trim();
+          const max = parseInt(document.getElementById('newPlayerMax').value) || 0;
+          if(!uuid) { alert('请输入玩家 UUID'); return; }
+          playerRows.push({ uuid, enabled: true, maxUpload: max, chunkBytes: 0, intervalMs: 0, splitMode: 'internal' });
+          renderPlayers();
+          document.getElementById('newPlayerUuid').value = '';
+          document.getElementById('newPlayerMax').value = '';
+        }
+
+        async function savePolicy(){
+          const defaults = {
+            maxUpload: parseInt(document.getElementById('d_maxUpload').value) || 0,
+            chunkBytes: parseInt(document.getElementById('d_chunkBytes').value) || 0,
+            intervalMs: parseInt(document.getElementById('d_intervalMs').value) || 0,
+            splitMode: document.getElementById('d_splitMode').value,
+            splitThreshold: parseInt(document.getElementById('d_splitThreshold').value) || 0,
+            splitChunkSize: parseInt(document.getElementById('d_splitChunkSize').value) || 0,
+            splitIntervalMs: parseInt(document.getElementById('d_splitIntervalMs').value) || 0,
+            splitChunksPerTick: parseInt(document.getElementById('d_splitChunksPerTick').value) || 0,
+          };
+          const players = {};
+          playerRows.forEach(p => {
+            if(!p.uuid) return;
+            const o = { enabled: !!p.enabled };
+            if(p.maxUpload !== undefined && p.maxUpload !== null && p.maxUpload !== '') o.maxUpload = +p.maxUpload;
+            if(p.chunkBytes) o.chunkBytes = +p.chunkBytes;
+            if(p.intervalMs) o.intervalMs = +p.intervalMs;
+            if(p.splitMode && p.splitMode !== 'internal') o.splitMode = p.splitMode;
+            players[p.uuid] = o;
+          });
+          const body = JSON.stringify({ enabled: true, defaults, players });
+          try{
+            const r = await fetch('/yzfnet/trafficpolicy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body
+            });
+            const j = await r.json();
+            alert(j.ok ? '已保存规则：' + (j.overrides !== undefined ? j.overrides + ' 个玩家覆盖' : '') : '保存失败：' + (j.error||''));
+            loadPolicy();
+          }catch(e){ alert('保存失败：' + e.message); }
+        }
+
+        setInterval(refresh, 1000);
+        refresh();
+        loadPolicy();
+        </script>
+        </body>
+        </html>
+        """;
+
     private void startHttp() throws IOException{
         InetAddress bind = InetAddress.getByName(httpAddress);
         YZFExternalAccessConfig policy = access();
@@ -1744,6 +2141,10 @@ public final class YZFNetGateway{
                 case "/yzfnet/kick" -> respond(exchange, 200, handleActionJson("kick", readBody(exchange)));
                 case "/yzfnet/filter" -> respond(exchange, 200, handleActionJson("filter", readBody(exchange)));
                 case "/yzfnet/say" -> respond(exchange, 200, handleActionJson("broadcast", readBody(exchange)));
+                case "/yzfnet/dashboard" -> respond(exchange, 200, DASHBOARD_HTML);
+                case "/yzfnet/traffic" -> respond(exchange, 200, "{\"ok\":true," + trafficStatsFieldsJson() + "}");
+                case "/yzfnet/trafficpolicy" -> respond(exchange, 200, handleActionJson("trafficPolicy", readBody(exchange)));
+                case "/yzfnet/policy" -> respond(exchange, 200, currentPolicyJson());
                 default -> {
                     // Core network module management endpoints. Build scripts use
                     // /yzfnet/netmods/stop to release the locked .exe on Windows before
@@ -1787,6 +2188,7 @@ public final class YZFNetGateway{
 
     private String statusJson(){
         return "\"enabled\":true"
+            + ",\"fullControl\":" + fullControl
             + ",\"serverOpen\":" + (Vars.state.isGame() || !Vars.state.isMenu())
             + ",\"players\":" + playerCount()
             + ",\"wave\":" + Vars.state.wave
@@ -2132,6 +2534,57 @@ public final class YZFNetGateway{
                 configureRateLimit(key, perSecond, burst);
                 return "\"ok\":true,\"key\":\"" + escape(key) + "\",\"perSecond\":" + perSecond + ",\"burst\":" + burst;
             }
+            case "trafficpolicy", "traffic_policy" -> {
+                boolean enabled = fields.getBool("enabled", false);
+                trafficPolicyEnabled = enabled;
+
+                // Parse global defaults from the "defaults" sub-object, or from top-level fields.
+                TrafficSettings newDefaults = new TrafficSettings();
+                Jval defaultsNode = fields.get("defaults");
+                if(defaultsNode != null && defaultsNode.isObject()){
+                    newDefaults.parse(defaultsNode, null);
+                }else{
+                    newDefaults.parse(fields, null);
+                }
+                // Also copy the global split mode from top-level if present
+                if(fields.has("splitMode") || fields.has("mode")){
+                    String m = fields.getString("splitMode", fields.getString("mode", "internal")).trim().toLowerCase();
+                    if(m.equals("off") || m.equals("internal") || m.equals("external")) newDefaults.splitMode = m;
+                }
+                // Build TrafficRule for backward-compat display
+                defaultTrafficRule = new TrafficRule(newDefaults.enabled, newDefaults.maxUpload, newDefaults.chunkBytes, newDefaults.intervalMs);
+
+                // Parse per-player settings from "players" (new) or "playerOverrides" (legacy)
+                ConcurrentHashMap<String, TrafficSettings> newPlayers = new ConcurrentHashMap<>();
+                ConcurrentHashMap<String, TrafficRule> newPlayerRules = new ConcurrentHashMap<>();
+                Jval playersNode = fields.get("players");
+                if(playersNode == null || !playersNode.isObject()) playersNode = fields.get("playerOverrides");
+                if(playersNode != null && playersNode.isObject()){
+                    for(var entry : playersNode.asObject()){
+                        String uuid = normalizeUuid(entry.key);
+                        if(uuid.isEmpty() || entry.value == null || !entry.value.isObject()) continue;
+                        TrafficSettings ps = new TrafficSettings();
+                        ps.parse(entry.value, newDefaults);
+                        // Inherit any unset fields from defaults
+                        ps.inheritFrom(newDefaults);
+                        newPlayers.put(uuid, ps);
+                        newPlayerRules.put(uuid, new TrafficRule(ps.enabled, ps.maxUpload, ps.chunkBytes, ps.intervalMs));
+                    }
+                }
+
+                // Apply the new config
+                defaultSettings = newDefaults;
+                playerSettings.clear();
+                playerSettings.putAll(newPlayers);
+                playerTrafficRules.clear();
+                playerTrafficRules.putAll(newPlayerRules);
+
+                Core.app.post(this::applyTrafficPolicies);
+                return "\"ok\":true,\"enabled\":" + trafficPolicyEnabled
+                    + ",\"defaultMaxUpload\":" + defaultSettings.maxUpload
+                    + ",\"defaultSplitMode\":\"" + escape(defaultSettings.splitMode) + "\""
+                    + ",\"overrides\":" + playerSettings.size();
+            }
             case "splitpolicy", "split_policy" -> {
                 String mode = fields.getString("mode", "").trim().toLowerCase();
                 if(!mode.isEmpty()){
@@ -2162,6 +2615,56 @@ public final class YZFNetGateway{
                 });
                 return "\"ok\":true";
             }
+            case "packet.send", "packet_send" -> {
+                // Allow external modules to inject packets back into the game.
+                // This is the primary way to re-emit packets in full control mode.
+                String packetType = fields.getString("packet", "").trim();
+                String target = fields.getString("connection", "all").trim();
+                String message = fields.getString("message", "").trim();
+                if(YZFText.blank(packetType)) return "\"ok\":false,\"error\":\"packet type is empty\"";
+                if(YZFText.blank(message)) return "\"ok\":false,\"error\":\"message is empty\"";
+                Core.app.post(() -> {
+                    // Determine the target connection(s)
+                    var cons = new java.util.ArrayList<NetConnection>();
+                    if(target.equalsIgnoreCase("all") || target.equalsIgnoreCase("*")){
+                        if(Vars.net != null) for(var c : Vars.net.getConnections()) cons.add(c);
+                    }else{
+                        if(Vars.net != null) for(var c : Vars.net.getConnections()){
+                            String uuid = normalizeUuid(c.uuid);
+                            if(uuid.equals(target)) cons.add(c);
+                        }
+                    }
+                    // Build the packet and send
+                    switch(packetType.toLowerCase()){
+                        case "sendmessagecallpacket", "sendmessage", "message" -> {
+                            var pkt = new SendMessageCallPacket();
+                            pkt.message = message;
+                            for(var c : cons) c.send(pkt, true);
+                            if(cons.isEmpty()) Call.sendMessage(message);
+                        }
+                        case "infomessagecallpacket", "infomessage", "info" -> {
+                            var pkt = new InfoMessageCallPacket();
+                            pkt.message = message;
+                            for(var c : cons) c.send(pkt, true);
+                            if(cons.isEmpty()) Call.infoMessage(message);
+                        }
+                        case "announcecallpacket", "announce" -> {
+                            var pkt = new AnnounceCallPacket();
+                            pkt.message = message;
+                            for(var c : cons) c.send(pkt, true);
+                            if(cons.isEmpty()) Call.announce(message);
+                        }
+                        case "sendchatmessagecallpacket", "sendchat", "chat" -> {
+                            var pkt = new SendChatMessageCallPacket();
+                            pkt.message = message;
+                            for(var c : cons) c.send(pkt, true);
+                            if(cons.isEmpty()) Call.sendMessage(message);
+                        }
+                        default -> Log.warn("[NetGateway] Unknown packet type for packet.send: @", packetType);
+                    }
+                });
+                return "\"ok\":true,\"packet\":\"" + escape(packetType) + "\",\"target\":\"" + escape(target) + "\"";
+            }
             case "status" -> {
                 return "\"ok\":true," + statusJson();
             }
@@ -2183,6 +2686,12 @@ public final class YZFNetGateway{
         }catch(NumberFormatException error){
             return fallback;
         }
+    }
+
+    private static String normalizeUuid(String uuid){
+        if(uuid == null) return "";
+        String value = uuid.trim();
+        return value.equals("AAAAAAAA") ? "" : value;
     }
 
     // ============================== helper types ==============================
@@ -2226,6 +2735,72 @@ public final class YZFNetGateway{
                 }catch(IOException ignored){
                 }
             }
+        }
+    }
+
+    /** Unified traffic settings for one player (or global default). */
+    private static final class TrafficSettings{
+        volatile boolean enabled = true;
+        // Connection-level shaping
+        volatile long maxUpload = 1024L * 1024L; // bytes/min, 0=unlimited
+        volatile int chunkBytes = 1024;
+        volatile int intervalMs = 100;
+        // Text message splitting
+        volatile String splitMode = "internal"; // off|internal|external
+        volatile int splitThreshold = 200;
+        volatile int splitChunkSize = 100;
+        volatile int splitIntervalMs = 60;
+        volatile int splitChunksPerTick = 4;
+
+        TrafficSettings(){}
+
+        /** Copy constructor — inherit from an existing settings (used for per-player fallback). */
+        TrafficSettings inheritFrom(TrafficSettings parent){
+            if(!enabled) enabled = parent.enabled;
+            if(maxUpload <= 0 && parent.maxUpload > 0) maxUpload = parent.maxUpload;
+            if(chunkBytes <= 0) chunkBytes = parent.chunkBytes;
+            if(intervalMs <= 0) intervalMs = parent.intervalMs;
+            if(splitMode == null || splitMode.isEmpty()) splitMode = parent.splitMode;
+            if(splitThreshold <= 0) splitThreshold = parent.splitThreshold;
+            if(splitChunkSize <= 0) splitChunkSize = parent.splitChunkSize;
+            if(splitIntervalMs <= 0) splitIntervalMs = parent.splitIntervalMs;
+            if(splitChunksPerTick <= 0) splitChunksPerTick = parent.splitChunksPerTick;
+            return this;
+        }
+
+        /** Parse a Jval (from the JSON action) into this settings. */
+        void parse(Jval node, TrafficSettings fallback){
+            if(node.has("enabled")) enabled = node.getBool("enabled", true);
+            if(node.has("maxUpload")) maxUpload = node.getLong("maxUpload", 0L);
+            else if(node.has("maxUploadPerMinute")) maxUpload = node.getLong("maxUploadPerMinute", 0L);
+            else if(node.has("bytesPerMinute")) maxUpload = node.getLong("bytesPerMinute", 0L);
+            else if(node.has("defaultMaxUpload")) maxUpload = node.getLong("defaultMaxUpload", 0L);
+            else if(fallback != null) maxUpload = fallback.maxUpload;
+            if(node.has("chunkBytes")) chunkBytes = Math.max(32, node.getInt("chunkBytes", 1024));
+            if(node.has("intervalMs")) intervalMs = Math.max(1, Math.min(60000, node.getInt("intervalMs", 100)));
+            // Split fields
+            if(node.has("splitMode")){
+                String m = node.getString("splitMode", "").trim().toLowerCase();
+                if(m.equals("off") || m.equals("internal") || m.equals("external")) splitMode = m;
+            }
+            if(node.has("splitThreshold")) splitThreshold = Math.max(16, node.getInt("splitThreshold", 200));
+            if(node.has("splitChunkSize")) splitChunkSize = Math.max(16, node.getInt("splitChunkSize", 100));
+            if(node.has("splitIntervalMs")) splitIntervalMs = Math.max(5, node.getInt("splitIntervalMs", 60));
+            if(node.has("splitChunksPerTick")) splitChunksPerTick = Math.max(1, node.getInt("splitChunksPerTick", 4));
+        }
+    }
+
+    private static final class TrafficRule{
+        final boolean enabled;
+        final long bytesPerMinute;
+        final int chunkBytes;
+        final int intervalMillis;
+
+        TrafficRule(boolean enabled, long bytesPerMinute, int chunkBytes, int intervalMillis){
+            this.enabled = enabled;
+            this.bytesPerMinute = bytesPerMinute;
+            this.chunkBytes = chunkBytes;
+            this.intervalMillis = intervalMillis;
         }
     }
 

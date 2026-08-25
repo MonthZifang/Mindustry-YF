@@ -108,7 +108,12 @@ public class ArcNetProvider implements NetProvider{
             }
         });
 
-        server = new Server(32768, 16384, new PacketSerializer());
+        server = new Server(32768, 16384, new PacketSerializer()){
+            @Override
+            protected Connection newConnection(){
+                return new ShapedConnection();
+            }
+        };
         server.setMulticast(multicastGroup, multicastPort);
         server.setDiscoveryHandler((address, handler) -> {
             ByteBuffer buffer = NetworkIO.writeServerData();
@@ -160,6 +165,9 @@ public class ArcNetProvider implements NetProvider{
             @Override
             public void received(Connection connection, Object object){
                 if(!(connection.getArbitraryData() instanceof ArcConnection k)) return;
+
+                k.trafficPacketsReceived++;
+                k.trafficLastActivity = Time.millis();
 
                 if(packetSpamLimit > 0 && !k.packetRate.allow(3000, packetSpamLimit)){
                     Log.warn("Blacklisting IP '@' as potential DOS attack - packet spam.", k.address);
@@ -333,19 +341,27 @@ public class ArcNetProvider implements NetProvider{
 
     @Override
     public void sendAllServer(Object object, Iterable<NetConnection> connections, boolean reliable){
-        //build up list of underlying arcnet connections for faster bulk transfer
+        // Preserve packet metadata for shaped connections. This lets the connection
+        // safely replace stale complete state snapshots before they enter the TCP stream.
         var cons = writeConnections.get();
         cons.clear();
         for(var con : connections){
             if(con instanceof ArcConnection ac){
-                cons.add(ac.connection);
+                if(ac.trafficShapingEnabled()){
+                    if(reliable) ac.connection.sendTCP(object);
+                    else ac.connection.sendUDP(object);
+                }else{
+                    cons.add(ac.connection);
+                }
             }
         }
 
-        if(reliable){
-            server.sendToAllTCP(object, cons);
-        }else{
-            server.sendToAllUDP(object, cons);
+        if(!cons.isEmpty()){
+            if(reliable){
+                server.sendToAllTCP(object, cons);
+            }else{
+                server.sendToAllUDP(object, cons);
+            }
         }
 
         cons.clear();
@@ -353,11 +369,21 @@ public class ArcNetProvider implements NetProvider{
 
     @Override
     public void sendAllServer(Object object, boolean reliable){
-        if(reliable){
-            server.sendToAllTCP(object);
-        }else{
-            server.sendToAllUDP(object);
+        var cons = writeConnections.get();
+        cons.clear();
+        for(var ac : connections){
+            if(ac.trafficShapingEnabled()){
+                if(reliable) ac.connection.sendTCP(object);
+                else ac.connection.sendUDP(object);
+            }else{
+                cons.add(ac.connection);
+            }
         }
+        if(!cons.isEmpty()){
+            if(reliable) server.sendToAllTCP(object, cons);
+            else server.sendToAllUDP(object, cons);
+        }
+        cons.clear();
     }
 
     @Override
@@ -368,11 +394,22 @@ public class ArcNetProvider implements NetProvider{
             return;
         }
 
-        if(reliable){
-            server.sendToAllExceptTCP(con.connection.getID(), object);
-        }else{
-            server.sendToAllExceptUDP(con.connection.getID(), object);
+        var cons = writeConnections.get();
+        cons.clear();
+        for(var ac : connections){
+            if(ac == con) continue;
+            if(ac.trafficShapingEnabled()){
+                if(reliable) ac.connection.sendTCP(object);
+                else ac.connection.sendUDP(object);
+            }else{
+                cons.add(ac.connection);
+            }
         }
+        if(!cons.isEmpty()){
+            if(reliable) server.sendToAllTCP(object, cons);
+            else server.sendToAllUDP(object, cons);
+        }
+        cons.clear();
     }
 
     @Override
@@ -425,6 +462,7 @@ public class ArcNetProvider implements NetProvider{
 
         @Override
         public void sendStream(Streamable stream){
+            if(SendStreamEvent.emit(this, stream, stream.stream == null ? 0 : stream.stream.available())) return;
             connection.addListener(new InputStreamSender(stream.stream, 1024){
                 int id;
 
@@ -467,6 +505,105 @@ public class ArcNetProvider implements NetProvider{
                     connections.remove(k);
                 }
             }
+        }
+
+        private @Nullable ShapedConnection shapedConnection(){
+            return connection instanceof ShapedConnection shaped ? shaped : null;
+        }
+
+        @Override
+        public void configureTrafficShaping(boolean enabled, long bytesPerMinute, int chunkBytes, int intervalMillis){
+            ShapedConnection shaped = shapedConnection();
+            if(shaped != null) shaped.configureTrafficShaping(enabled, bytesPerMinute, chunkBytes, intervalMillis);
+        }
+
+        @Override
+        public boolean trafficShapingEnabled(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped != null && shaped.trafficShapingEnabled();
+        }
+
+        @Override
+        public long trafficBytesPerMinute(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0L : shaped.trafficBytesPerMinute();
+        }
+
+        @Override
+        public int trafficChunkBytes(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0 : shaped.trafficChunkBytes();
+        }
+
+        @Override
+        public int trafficEffectiveChunkBytes(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0 : shaped.trafficEffectiveChunkBytes();
+        }
+
+        @Override
+        public int trafficIntervalMillis(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0 : shaped.trafficIntervalMillis();
+        }
+
+        @Override
+        public long trafficQueuedBytes(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0L : shaped.trafficQueuedBytes();
+        }
+
+        @Override
+        public int trafficQueuedPackets(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0 : shaped.trafficQueuedPackets();
+        }
+
+        @Override
+        public long trafficBytesSent(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? trafficUploadBytes : shaped.trafficTcpBytesSent() + shaped.trafficUdpBytesSent();
+        }
+
+        @Override
+        public long trafficSentPackets(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? trafficPacketsSent : shaped.trafficPacketsSent();
+        }
+
+        @Override
+        public long trafficReceivedPackets(){
+            return trafficPacketsReceived;
+        }
+
+        @Override
+        public long trafficLastActivityMillis(){
+            ShapedConnection shaped = shapedConnection();
+            return Math.max(trafficLastActivity, shaped == null ? 0L : shaped.trafficLastWriteMillis());
+        }
+
+        @Override
+        public long trafficChunksSent(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0L : shaped.trafficChunksSent();
+        }
+
+        @Override
+        public long trafficSplitPackets(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0L : shaped.trafficSplitPackets();
+        }
+
+        @Override
+        public long trafficCoalescedPackets(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0L : shaped.trafficCoalescedPackets();
+        }
+
+        @Override
+        public long trafficDroppedUnreliablePackets(){
+            ShapedConnection shaped = shapedConnection();
+            return shaped == null ? 0L : shaped.trafficDroppedUnreliablePackets();
         }
 
         @Override

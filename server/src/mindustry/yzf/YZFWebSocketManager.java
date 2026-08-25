@@ -16,7 +16,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * WebSocket 瀹㈡埛绔ˉ鎺ワ紝鏀寔澶氫釜 WebSocket 杩炴帴銆? * 姣忎釜杩炴帴鏈夊敮涓€ ID锛孞S 妯″潡鍙€氳繃 yzf.ws.* 鎿嶄綔銆? */
+ * WebSocket 客户端桥接，支持多个 WebSocket 连接。
+ * 每个连接有唯一 ID，JS 模块可通过 yzf.ws.* 操作。
+ */
 public final class YZFWebSocketManager{
     private static final ConcurrentHashMap<String, YZFWebSocketConnection> connections = new ConcurrentHashMap<>();
     private static final AtomicInteger nextId = new AtomicInteger(1);
@@ -25,13 +27,14 @@ public final class YZFWebSocketManager{
     private static ExecutorService executor;
 
     /**
-     * 鍒涘缓 WebSocket 杩炴帴
-     * @param url WebSocket URL (ws:// 鎴?wss://)
-     * @param moduleScope 妯″潡浣滅敤鍩燂紙鐢ㄤ簬鍥炶皟锛?     * @param onOpen 杩炴帴寤虹珛鍥炶皟
-     * @param onMessage 娑堟伅鎺ユ敹鍥炶皟
-     * @param onClose 杩炴帴鍏抽棴鍥炶皟
-     * @param onError 閿欒鍥炶皟
-     * @return 杩炴帴 ID
+     * 创建 WebSocket 连接
+     * @param url WebSocket URL (ws:// 或 wss://)
+     * @param moduleScope 模块作用域（用于回调）
+     * @param onOpen 连接建立回调
+     * @param onMessage 消息接收回调
+     * @param onClose 连接关闭回调
+     * @param onError 错误回调
+     * @return 连接 ID
      */
     public String connect(String moduleId, String url, Scriptable moduleScope, Function onOpen, Function onMessage, Function onClose, Function onError){
         if(connections.size() >= maxConnections) return null;
@@ -66,10 +69,10 @@ public final class YZFWebSocketManager{
                 }
             });
 
-            Log.info("[@] WebSocket 杩炴帴鍒涘缓: @ -> @", MindustryYZF.name, id, url);
+            Log.info("[@] WebSocket 连接创建: @ -> @", MindustryYZF.name, id, url);
             return id;
         }catch(Exception e){
-            Log.err("[@] WebSocket 杩炴帴澶辫触: @ -> @", MindustryYZF.name, id, url, e);
+            Log.err("[@] WebSocket 连接失败: @ -> @", MindustryYZF.name, id, url, e);
             if(onError != null){
                 postCallback("connect", id, moduleScope, onError, new Object[]{e.getMessage()});
             }
@@ -78,7 +81,8 @@ public final class YZFWebSocketManager{
     }
 
     /**
-     * 鍙戦€佹枃鏈秷鎭?     */
+     * 发送文本消息
+     */
     public boolean sendText(String connectionId, String message){
         YZFWebSocketConnection conn = connections.get(connectionId);
         if(conn == null || conn.isClosed() || conn.webSocket == null) return false;
@@ -86,13 +90,14 @@ public final class YZFWebSocketManager{
             conn.webSocket.sendText(message, true);
             return true;
         }catch(Exception e){
-            Log.err("[@] WebSocket 鍙戦€佸け璐? @", MindustryYZF.name, connectionId, e);
+            Log.err("[@] WebSocket 发送失败: @", MindustryYZF.name, connectionId, e);
             return false;
         }
     }
 
     /**
-     * 鍙戦€佷簩杩涘埗娑堟伅锛坆ase64 缂栫爜锛?     */
+     * 发送二进制消息（base64 编码）
+     */
     public boolean sendBinary(String connectionId, String base64Data){
         YZFWebSocketConnection conn = connections.get(connectionId);
         if(conn == null || conn.isClosed() || conn.webSocket == null) return false;
@@ -101,13 +106,13 @@ public final class YZFWebSocketManager{
             conn.webSocket.sendBinary(ByteBuffer.wrap(data), true);
             return true;
         }catch(Exception e){
-            Log.err("[@] WebSocket 鍙戦€佷簩杩涘埗澶辫触: @", MindustryYZF.name, connectionId, e);
+            Log.err("[@] WebSocket 发送二进制失败: @", MindustryYZF.name, connectionId, e);
             return false;
         }
     }
 
     /**
-     * 鍏抽棴杩炴帴
+     * 关闭连接
      */
     public void close(String connectionId){
         YZFWebSocketConnection conn = connections.remove(connectionId);
@@ -131,14 +136,15 @@ public final class YZFWebSocketManager{
     }
 
     /**
-     * 妫€鏌ヨ繛鎺ユ槸鍚﹀瓨娲?     */
+     * 检查连接是否存在
+     */
     public boolean isOpen(String connectionId){
         YZFWebSocketConnection conn = connections.get(connectionId);
         return conn != null && conn.webSocket != null && !conn.isClosed();
     }
 
     /**
-     * 鑾峰彇杩炴帴 URL
+     * 获取连接 URL
      */
     public String getUrl(String connectionId){
         YZFWebSocketConnection conn = connections.get(connectionId);
@@ -146,14 +152,15 @@ public final class YZFWebSocketManager{
     }
 
     /**
-     * 鑾峰彇鎵€鏈夋椿璺冭繛鎺?ID
+     * 获取所有活跃连接 ID
      */
     public String[] listConnections(){
         return connections.keySet().toArray(new String[0]);
     }
 
     /**
-     * 鍏抽棴鎵€鏈夎繛鎺?     */
+     * 关闭所有连接
+     */
     public void closeAll(){
         for(YZFWebSocketConnection conn : connections.values()){
             if(!conn.isClosed()){
@@ -235,7 +242,7 @@ public final class YZFWebSocketManager{
         public void onOpen(WebSocket webSocket){
             this.webSocket = webSocket;
             webSocket.request(1);
-            Log.info("[@] WebSocket 宸茶繛鎺? @", MindustryYZF.name, id);
+            Log.info("[@] WebSocket 已连接: @", MindustryYZF.name, id);
             if(onOpen != null && !suppressCallbacks){
                 postCallback("onOpen", id, moduleScope, onOpen, new Object[]{id});
             }
@@ -275,7 +282,7 @@ public final class YZFWebSocketManager{
                 }
                 return null;
             }
-            // 灏嗕簩杩涘埗鏁版嵁杞负 base64 浼犵粰 JS
+            // 将二进制数据转换为 base64 传给 JS
             byte[] bytes = new byte[data.remaining()];
             data.get(bytes);
             String base64 = java.util.Base64.getEncoder().encodeToString(bytes);
@@ -290,7 +297,7 @@ public final class YZFWebSocketManager{
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason){
             closed = true;
             connections.remove(id);
-            Log.info("[@] WebSocket 宸插叧闂? @ (code=@, reason=@)", MindustryYZF.name, id, statusCode, reason);
+            Log.info("[@] WebSocket 已关闭: @ (code=@, reason=@)", MindustryYZF.name, id, statusCode, reason);
             if(onClose != null && !suppressCallbacks){
                 postCallback("onClose", id, moduleScope, onClose, new Object[]{id, statusCode, reason != null ? reason : ""});
             }
@@ -304,7 +311,7 @@ public final class YZFWebSocketManager{
             try{ webSocket.abort(); }catch(Throwable closeError){
                 YZFErrorLog.low("websocket", "WebSocket abort failed", closeError);
             }
-            Log.err("[@] WebSocket 閿欒: @ - @", MindustryYZF.name, id, error.getMessage());
+            Log.err("[@] WebSocket 错误: @ - @", MindustryYZF.name, id, error.getMessage());
             if(onError != null && !suppressCallbacks){
                 postCallback("onError", id, moduleScope, onError, new Object[]{id, error.getMessage()});
             }

@@ -5,9 +5,15 @@ import arc.func.Cons;
 import arc.util.Log;
 import mindustry.Vars;
 import mindustry.core.Version;
-import mindustry.game.EventType.ResetEvent;
 import mindustry.game.EventType.PlayerJoin;
+import mindustry.game.EventType.PlayerLeave;
+import mindustry.game.EventType.ResetEvent;
+import mindustry.gen.Call;
+import mindustry.net.Administration.Config;
 import mindustry.server.ServerControl;
+
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class MindustryYZF{
     public static final String name = "MindustryYZF";
@@ -23,6 +29,10 @@ public final class MindustryYZF{
     private static volatile YZFNetGateway netGateway;
     private static Cons<ResetEvent> resetHandler;
     private static Cons<PlayerJoin> playerJoinHandler;
+    private static Cons<PlayerLeave> playerLeaveHandler;
+
+    /** 玩家进出去重集合：记录已知在线玩家 UUID，防止换图后重复公告。 */
+    private static final Set<String> connectedPlayers = ConcurrentHashMap.newKeySet();
 
     private MindustryYZF(){
     }
@@ -79,15 +89,38 @@ public final class MindustryYZF{
             modHotReloadManager = new YZFModHotReloadManager(context);
             modHotReloadManager.start();
         }
+        // ===== 玩家进出公告：接管旁白消息，支持去重 =====
+        Config.showConnectMessages.set(false);
+
         resetHandler = event -> registry.scan();
-        playerJoinHandler = event -> ensurePlayerComid(event.player);
         Events.on(ResetEvent.class, resetHandler);
+
+        playerJoinHandler = event -> {
+            if(event == null || event.player == null) return;
+            String uuid = event.player.uuid();
+            if(uuid == null) return;
+            // 确保 COMID（原有逻辑）
+            ensurePlayerComid(event.player);
+            // 去重：如果 UUID 已在集合中，说明是换图重连，不重复公告
+            if(connectedPlayers.add(uuid)){
+                Call.sendMessage("[accent]" + event.player.name + "[accent] 加入了服务器");
+            }
+        };
         Events.on(PlayerJoin.class, playerJoinHandler);
+
+        playerLeaveHandler = event -> {
+            if(event == null || event.player == null) return;
+            String uuid = event.player.uuid();
+            if(uuid == null) return;
+            connectedPlayers.remove(uuid);
+            Call.sendMessage("[accent]" + event.player.name + "[accent] 离开了服务器");
+        };
+        Events.on(PlayerLeave.class, playerLeaveHandler);
 
         bootstrapped = true;
         audit.record("boot", name, "runtime=" + runtime.mode());
 
-        Log.info("[@] 启动完成。运行时=@ 模块数=@ 脚本数=@ 根目录=@",
+        Log.info("&lc[@]&lg 启动完成。&fi运行时=&lw@ &fi模块数=&lw@ &fi脚本数=&lw@ &fi根目录=&lw@",
             name,
             runtime.mode(),
             registry.moduleCount(),
@@ -97,13 +130,13 @@ public final class MindustryYZF{
 
         // ===== 启动公告：全部模块加载完成后展示 =====
         Log.info("");
-        Log.info("======================================================");
-        Log.info("  [@] 服务端启动公告", name);
-        Log.info("  服务端版本: @", version);
-        Log.info("  游戏版本:   @", Version.combined());
-        Log.info("  插件加载:   成功 @ | 失败 @ | 禁用 @", runtime.lastLoadedCount(), runtime.lastFailedCount(), runtime.lastDisabledCount());
-        Log.info("  官方QQ群:   333641130");
-        Log.info("======================================================");
+        Log.info("&lc======================================================");
+        Log.info("&lc  [&ly@&lc] &lg服务端启动公告", name);
+        Log.info("&lc  &fi服务端版本: &lw@", version);
+        Log.info("&lc  &fi游戏版本:   &lw@", Version.combined());
+        Log.info("&lc  &fi插件加载:   &lg成功 @ &fr| &lr失败 @ &fr| &ly禁用 @", runtime.lastLoadedCount(), runtime.lastFailedCount(), runtime.lastDisabledCount());
+        Log.info("&lc  &fi官方QQ群:   &lm333641130");
+        Log.info("&lc======================================================");
         Log.info("");
 
         // ===== 外部网络模块网关：让任意语言的外部模块参与游戏收发包 =====
@@ -183,6 +216,10 @@ public final class MindustryYZF{
                 if(playerJoinHandler != null){
                     Events.remove(PlayerJoin.class, playerJoinHandler);
                     playerJoinHandler = null;
+                }
+                if(playerLeaveHandler != null){
+                    Events.remove(PlayerLeave.class, playerLeaveHandler);
+                    playerLeaveHandler = null;
                 }
             }catch(Throwable error){
                 YZFErrorLog.high(name, "Failed to remove YZF event handlers", error);

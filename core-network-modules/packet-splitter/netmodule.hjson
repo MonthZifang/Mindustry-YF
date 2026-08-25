@@ -6,8 +6,8 @@
 #   source:   - cpp 类型的主源文件路径。
 {
   id: packet-splitter
-  name: "大包拆分器"
-  version: "1.0.0"
+  name: "文本消息拆分器"
+  version: "1.1.0"
   priority: 10
   enabled: true
   command: "packet-splitter.exe"

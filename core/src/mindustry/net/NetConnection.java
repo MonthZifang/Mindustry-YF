@@ -35,6 +35,39 @@ public abstract class NetConnection{
     /** Entities that only this player will get synced to them. */
     public Seq<Syncc> localEntities = new Seq<>(false);
 
+    // ---- YZF per-connection traffic counters (updated by gateway + serializer) ----
+    /** Total bytes uploaded (server → this client). */
+    public volatile long trafficUploadBytes;
+    /** Total bytes downloaded (this client → server). */
+    public volatile long trafficDownloadBytes;
+    /** Total packets sent to this client. */
+    public volatile long trafficPacketsSent;
+    /** Total packets received from this client. */
+    public volatile long trafficPacketsReceived;
+    /** Last activity timestamp (millis). */
+    public volatile long trafficLastActivity;
+
+    /** Applies or removes the server-to-client byte pacer for this connection. */
+    public void configureTrafficShaping(boolean enabled, long bytesPerMinute, int chunkBytes, int intervalMillis){
+    }
+
+    public boolean trafficShapingEnabled(){ return false; }
+    public long trafficBytesPerMinute(){ return 0L; }
+    public int trafficChunkBytes(){ return 0; }
+    public int trafficEffectiveChunkBytes(){ return 0; }
+    public int trafficIntervalMillis(){ return 0; }
+    public long trafficQueuedBytes(){ return 0L; }
+    public int trafficQueuedPackets(){ return 0; }
+    public long trafficBytesSent(){ return trafficUploadBytes; }
+    public long trafficBytesReceived(){ return trafficDownloadBytes; }
+    public long trafficSentPackets(){ return trafficPacketsSent; }
+    public long trafficReceivedPackets(){ return trafficPacketsReceived; }
+    public long trafficLastActivityMillis(){ return trafficLastActivity; }
+    public long trafficChunksSent(){ return 0L; }
+    public long trafficSplitPackets(){ return 0L; }
+    public long trafficCoalescedPackets(){ return 0L; }
+    public long trafficDroppedUnreliablePackets(){ return 0L; }
+
     //TODO: refactor to state enum
     public boolean hasConnected, hasBegunConnecting, determiningAssets, receivingAssets, hasDisconnected;
     public float viewWidth, viewHeight, viewX, viewY;

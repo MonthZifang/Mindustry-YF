@@ -103,7 +103,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
         if(plan.isEmpty()){
             MindustryYZF.context().metrics.moduleFailures.incrementAndGet();
             MindustryYZF.context().metrics.markFailure("module-not-found:" + moduleId);
-            Log.err("[@] 鎵句笉鍒版ā鍧? @", MindustryYZF.name, moduleId);
+            Log.err("[@] 找不到模块 @", MindustryYZF.name, moduleId);
             return;
         }
 
@@ -299,7 +299,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
                     handler.handleMessage(sb.toString());
                     return true;
                 }catch(Throwable t){
-                    Log.err("[@] 璋冪敤鍛戒护 '@' 澶辫触: @", MindustryYZF.name, commandName, t.getMessage());
+                    Log.err("[@] 调用命令 '@' 失败: @", MindustryYZF.name, commandName, t.getMessage());
                     return false;
                 }
             }
@@ -356,11 +356,11 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
 
         if(!module.meta.enabled){
             unloadModule(module.fullId(), true);
-            Log.info("[@] 璺宠繃宸茬鐢ㄦā鍧? @", MindustryYZF.name, module.fullId());
+            Log.info("[@] 跳过已禁用模块 @", MindustryYZF.name, module.fullId());
             return true;
         }
         if(!module.hasMain()){
-            Log.warn("[@] 妯″潡缂哄皯涓昏剼鏈? @ -> @", MindustryYZF.name, module.fullId(), module.meta.main);
+            Log.warn("[@] 模块缺少主脚本 @ -> @", MindustryYZF.name, module.fullId(), module.meta.main);
             MindustryYZF.context().metrics.moduleFailures.incrementAndGet();
             MindustryYZF.context().metrics.markFailure("missing-main:" + module.fullId());
             return false;
@@ -487,7 +487,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
             "  command: function(name, a, b, c){\n" +
             "    if(arguments.length === 3){ return __yzfBridge.command3(String(name), String(a), b); }\n" +
             "    if(arguments.length === 4){ return __yzfBridge.command4(String(name), String(a), String(b), c); }\n" +
-            "    throw 'yzf.command 鍙傛暟閿欒';\n" +
+            "    throw 'yzf.command 参数错误';\n" +
             "  },\n" +
             "  playerCommand: function(name, usage, description, fn){ return __yzfBridge.playerCommand4(String(name), String(usage), String(description), fn); },\n" +
             "  adminCommand: function(name, usage, description, permission, fn){ return __yzfBridge.adminCommand4(String(name), String(usage), String(description), String(permission), fn); },\n" +
@@ -523,7 +523,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
             "      if(arguments.length === 3){ return __yzfBridge.serviceCall3(String(serviceId), String(action), String(a)); }\n" +
             "      if(arguments.length === 4){ return __yzfBridge.serviceCall4(String(serviceId), String(action), String(a), String(b)); }\n" +
             "      if(arguments.length === 5){ return __yzfBridge.serviceCall5(String(serviceId), String(action), String(a), String(b), String(c)); }\n" +
-            "      throw 'yzf.service.call 鍙傛暟閿欒';\n" +
+            "      throw 'yzf.service.call 参数错误';\n" +
             "    }\n" +
             "  },\n" +
             "  runtime: {\n" +
@@ -829,12 +829,12 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
         playerCommandOwners.put(commandName, moduleId);
     }
 
-    /** 璁剧疆杩愯鏃跺懡浠ゅ洖璋?(鐢ㄤ簬鎺у埗鍙版敞鍐屽悗鐢辨ā鍧楁彁渚涘疄鐜? */
+    /** 设置运行时命令回调（用于控制台注册后由模块提供实现） */
     synchronized void setRuntimeCommandCallback(String commandName, Function callback){
         runtimeServerCallbacks.put(commandName, callback);
     }
 
-    /** 璁剧疆杩愯鏃剁帺瀹跺懡浠ゅ洖璋?*/
+    /** 设置运行时玩家命令回调 */
     synchronized void setRuntimePlayerCommandCallback(String commandName, Function callback){
         runtimePlayerCallbacks.put(commandName, callback);
     }
@@ -842,7 +842,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
     synchronized YZFEventBinding registerModuleEvent(YZFModuleDefinition module, Scriptable scope, String eventName, Function callback){
         Class<?> eventType = YZFEventRegistry.find(eventName);
         if(eventType == null){
-            throw new IllegalArgumentException("鏈煡浜嬩欢: " + eventName);
+            throw new IllegalArgumentException("未知事件: " + eventName);
         }
         Cons<Object> handler = event -> invokeEvent(scope, callback, event);
         Events.on((Class)eventType, (Cons)handler);
@@ -864,7 +864,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
         ensureScripts();
         YZFLoadedModule state = loadedModules.get(moduleId);
         if(state == null){
-            Log.err("[@] 鏃犳硶璋冪敤鍛戒护锛屾ā鍧楁湭澶勪簬宸插姞杞界姸鎬? @", MindustryYZF.name, moduleId);
+            Log.err("[@] 无法调用命令，模块未处于已加载状态 @", MindustryYZF.name, moduleId);
             return;
         }
         Context ctx = Context.enter();
@@ -875,7 +875,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
             callback.call(ctx, state.scope, state.scope, new Object[]{jsArgs});
             MindustryYZF.context().metrics.serverCommandCalls.incrementAndGet();
         }catch(Throwable t){
-            Log.err("[@] 鍛戒护鍥炶皟鎵ц澶辫触: @ (妯″潡: @)", MindustryYZF.name, "unknown", moduleId, t);
+            Log.err("[@] 命令回调执行失败: @ (模块: @)", MindustryYZF.name, "unknown", moduleId, t);
         }finally{
             Context.exit();
         }
@@ -894,7 +894,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
             callback.call(ctx, state.scope, state.scope, new Object[]{player, jsArgs});
             MindustryYZF.context().metrics.playerCommandCalls.incrementAndGet();
         }catch(Throwable t){
-            Log.err("[@] 鐜╁鍛戒护鍥炶皟鎵ц澶辫触: @ (妯″潡: @)", MindustryYZF.name, "unknown", moduleId, t);
+            Log.err("[@] 玩家命令回调执行失败: @ (模块: @)", MindustryYZF.name, "unknown", moduleId, t);
         }finally{
             Context.exit();
         }
@@ -906,7 +906,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
         try{
             callback.call(ctx, scope, scope, new Object[]{event});
         }catch(Throwable t){
-            Log.err("[@] 浜嬩欢鍥炶皟鎵ц澶辫触: @", MindustryYZF.name, t);
+            Log.err("[@] 事件回调执行失败: @", MindustryYZF.name, t);
         }finally{
             Context.exit();
         }
@@ -1000,7 +1000,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
         try{
             callback.call(ctx, scope, scope, new Object[0]);
         }catch(Throwable t){
-            Log.err("[@] 鐢熷懡鍛ㄦ湡鍥炶皟鎵ц澶辫触: @", MindustryYZF.name, t.getMessage());
+            Log.err("[@] 生命周期回调执行失败: @", MindustryYZF.name, t.getMessage());
             Log.err(t);
         }finally{
             Context.exit();
@@ -1032,7 +1032,7 @@ public final class YZFJsRuntime implements YZFScriptRuntime{
             try{
                 invokeLifecycle(state.onDisable, state.scope);
             }catch(Throwable t){
-                Log.err("[@] 妯″潡 onDisable 鎵ц澶辫触: @", MindustryYZF.name, moduleId, t);
+                Log.err("[@] 模块 onDisable 执行失败: @", MindustryYZF.name, moduleId, t);
             }
         }
 

@@ -1,0 +1,10 @@
+{
+  id: "net-player-stats"
+  name: "玩家流量统计"
+  version: "1.0.0"
+  priority: 30
+  enabled: true
+  command: "net-player-stats.exe"
+  args: []
+  build: { type: "go" }
+}
