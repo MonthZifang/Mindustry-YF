@@ -214,12 +214,16 @@ public final class YZFPlayerSqlStore{
 
     public void savePlayerData(long comid, ObjectMap<String, String> data){
         if(sqlClient == null) return;
-        try(Connection connection = sqlClient.dataSource().getConnection()){
+        Connection connection = null;
+        try{
+            connection = sqlClient.dataSource().getConnection();
+            boolean oldAutoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
             try(PreparedStatement delete = connection.prepareStatement("delete from yzf_player_data where comid = ?")){
                 delete.setLong(1, comid);
                 delete.executeUpdate();
             }
-            if(data == null) return;
+            if(data == null){ connection.commit(); connection.setAutoCommit(oldAutoCommit); return; }
             for(ObjectMap.Entry<String, String> entry : data){
                 try(PreparedStatement insert = connection.prepareStatement("insert into yzf_player_data (comid, data_key, data_value) values (?, ?, ?)")){
                     insert.setLong(1, comid);
@@ -228,9 +232,22 @@ public final class YZFPlayerSqlStore{
                     insert.executeUpdate();
                 }
             }
+            connection.commit();
+            connection.setAutoCommit(oldAutoCommit);
         }catch(Exception e){
+            if(connection != null) try{ connection.rollback(); }catch(Exception ignored){}
             Log.err("[@] Failed to save player data to SQL store", MindustryYZF.name, e);
+        }finally{
+            if(connection != null) try{ connection.close(); }catch(Exception ignored){}
         }
+    }
+
+    public void clearPlayerData(long comid){
+        if(sqlClient == null) return;
+        try(Connection connection = sqlClient.dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement("delete from yzf_player_data where comid = ?")){
+            statement.setLong(1, comid);
+            statement.executeUpdate();
+        }catch(Exception e){ Log.err("[@] Failed to clear player SQL data", MindustryYZF.name, e); }
     }
 
     public String exportPlayerDataJson(long comid){

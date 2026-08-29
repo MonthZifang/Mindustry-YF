@@ -20,6 +20,7 @@ public class ShapedConnection extends Connection{
     private static final int minChunkBytes = 32;
     private static final int maxChunkBytes = 16 * 1024;
     private static final int maxFrameBytes = 64 * 1024;
+    private static final int maxExpandableFrameBytes = 16 * 1024 * 1024;
     // Do not emit oversized UDP datagrams. Unmodified Mindustry clients have
     // no application-level UDP reassembly protocol; large datagrams are sent
     // as length-framed TCP instead, while small latency-sensitive updates stay UDP.
@@ -309,16 +310,24 @@ public class ShapedConnection extends Connection{
     }
 
     private byte[] serializeTcp(Object object){
-        ByteBuffer buffer = ByteBuffer.allocate(maxFrameBytes);
-        int lengthLength = tcp.serialization.getLengthLength();
-        buffer.position(lengthLength);
-        tcp.serialization.write(buffer, object);
-        int end = buffer.position();
-        buffer.position(0);
-        tcp.serialization.writeLength(buffer, end - lengthLength);
-        buffer.position(end);
-        buffer.flip();
-        return copyBuffer(buffer);
+        int capacity = maxFrameBytes;
+        while(true){
+            try{
+                ByteBuffer buffer = ByteBuffer.allocate(capacity);
+                int lengthLength = tcp.serialization.getLengthLength();
+                buffer.position(lengthLength);
+                tcp.serialization.write(buffer, object);
+                int end = buffer.position();
+                buffer.position(0);
+                tcp.serialization.writeLength(buffer, end - lengthLength);
+                buffer.position(end);
+                buffer.flip();
+                return copyBuffer(buffer);
+            }catch(BufferOverflowException overflow){
+                if(capacity >= maxExpandableFrameBytes) throw overflow;
+                capacity = Math.min(maxExpandableFrameBytes, capacity * 2);
+            }
+        }
     }
 
     private byte[] framePacket(byte[] packet){

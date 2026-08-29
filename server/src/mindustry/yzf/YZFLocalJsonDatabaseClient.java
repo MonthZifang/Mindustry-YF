@@ -94,6 +94,8 @@ public final class YZFLocalJsonDatabaseClient implements YZFDatabaseClient{
 
     @Override
     public synchronized void set(String category, String key, String valueJson){
+        category = normalizeCategory(category);
+        key = normalizeKey(key);
         ObjectMap<String, String> data = loadCategory(category);
         if(valueJson == null){
             data.remove(key);
@@ -105,6 +107,8 @@ public final class YZFLocalJsonDatabaseClient implements YZFDatabaseClient{
 
     @Override
     public synchronized boolean remove(String category, String key){
+        category = normalizeCategory(category);
+        key = normalizeKey(key);
         ObjectMap<String, String> data = loadCategory(category);
         String removed = data.remove(key);
         if(removed == null) return false;
@@ -139,14 +143,16 @@ public final class YZFLocalJsonDatabaseClient implements YZFDatabaseClient{
 
     @Override
     public synchronized void importJson(String json){
-        cache.clear();
-        clearDirectory(rootDir.file());
         if(json == null || json.trim().isEmpty()){
             return;
         }
         Jval root = Jval.read(json);
+        if(root == null || !root.isObject()) throw new IllegalArgumentException("database import must be a JSON object");
+        Jval categories = root.has("categories") ? root.get("categories") : root;
+        if(categories == null || !categories.isObject()) throw new IllegalArgumentException("database categories must be a JSON object");
+        cache.clear();
+        clearDirectory(rootDir.file());
         if(root != null && root.isObject()){
-            Jval categories = root.has("categories") ? root.get("categories") : root;
             if(categories != null && categories.isObject()){
                 for(var entry : categories.asObject()){
                     String category = entry.key;
@@ -276,9 +282,15 @@ public final class YZFLocalJsonDatabaseClient implements YZFDatabaseClient{
             return;
         }
         file.getParentFile().mkdirs();
-        try(Writer writer = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8)){
+        File temp = new File(file.getPath() + ".tmp");
+        try(Writer writer = new OutputStreamWriter(new FileOutputStream(temp), StandardCharsets.UTF_8)){
             writer.write(data.get(normalizedKey));
+            writer.flush();
+            if(!temp.renameTo(file)){
+                java.nio.file.Files.move(temp.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            }
         }catch(Exception e){
+            temp.delete();
             Log.err("[@] Failed to save local db entry @/@", MindustryYZF.name, normalizedCategory, normalizedKey, e);
         }
     }

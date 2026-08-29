@@ -148,6 +148,10 @@ public final class YZFPlayerDataStore{
      */
     public void clear(long comid){
         cache.remove(comid);
+        if(sqlStore != null){
+            sqlStore.clearPlayerData(comid);
+            return;
+        }
         File file = playerFile(comid);
         if(file.exists()){
             file.delete();
@@ -211,9 +215,13 @@ public final class YZFPlayerDataStore{
             obj.put(e.key, e.value);
         }
         File file = playerFile(comid);
-        try(Writer w = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8)){
+        File temp = new File(file.getPath() + ".tmp");
+        try(Writer w = new OutputStreamWriter(new FileOutputStream(temp), StandardCharsets.UTF_8)){
             w.write(obj.toString(Jval.Jformat.formatted));
+            w.flush();
+            if(!temp.renameTo(file)) java.nio.file.Files.move(temp.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
         }catch(Exception e){
+            temp.delete();
             Log.err("[@] 保存玩家数据失败 comid=@", MindustryYZF.name, comid, e);
         }
     }

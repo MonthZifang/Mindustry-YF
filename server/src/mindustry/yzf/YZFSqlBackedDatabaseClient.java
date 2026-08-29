@@ -112,6 +112,12 @@ public final class YZFSqlBackedDatabaseClient implements YZFDatabaseClient{
                     statement.setString(3, normalizedValue);
                     statement.executeUpdate();
                 }
+            }else if(isPostgres()){
+                try(PreparedStatement statement = connection.prepareStatement(
+                    "insert into " + tableName + " (category, entry_key, entry_value) values (?, ?, ?) " +
+                    "on conflict(category, entry_key) do update set entry_value = excluded.entry_value")){
+                    statement.setString(1, normalizedCategory); statement.setString(2, normalizedKey); statement.setString(3, normalizedValue); statement.executeUpdate();
+                }
             }else{
                 try(PreparedStatement statement = connection.prepareStatement(
                     "insert into " + tableName + " (category, entry_key, entry_value) values (?, ?, ?) " +
@@ -167,21 +173,33 @@ public final class YZFSqlBackedDatabaseClient implements YZFDatabaseClient{
     @Override
     public void importJson(String json) throws Exception{
         ensureSchema();
-        try(Connection connection = sqlClient.dataSource().getConnection(); Statement statement = connection.createStatement()){
-            statement.executeUpdate("delete from " + tableName);
-        }
         if(json == null || json.trim().isEmpty()) return;
 
         Jval root = Jval.read(json);
         if(root == null || !root.isObject()) return;
         Jval categories = root.has("categories") ? root.get("categories") : root;
         if(categories == null || !categories.isObject()) return;
-
-        for(var categoryEntry : categories.asObject()){
-            if(categoryEntry.value == null || !categoryEntry.value.isObject()) continue;
-            for(var item : categoryEntry.value.asObject()){
-                set(categoryEntry.key, item.key, item.value == null ? null : item.value.toString(Jval.Jformat.plain));
+        Connection connection = null;
+        try{
+            connection = sqlClient.dataSource().getConnection();
+            boolean auto = connection.getAutoCommit(); connection.setAutoCommit(false);
+            try(Statement clear = connection.createStatement()){
+                clear.executeUpdate("delete from " + tableName);
             }
+            for(var categoryEntry : categories.asObject()) if(categoryEntry.value != null && categoryEntry.value.isObject())
+                for(var item : categoryEntry.value.asObject()){
+                    if(item.value == null) continue;
+                    String category = normalizeCategory(categoryEntry.key), key = normalizeKey(item.key), value = normalizeJson(item.value.toString(Jval.Jformat.plain));
+                    try(PreparedStatement statement = connection.prepareStatement("insert into " + tableName + " (category, entry_key, entry_value) values (?, ?, ?)")){
+                        statement.setString(1, category); statement.setString(2, key); statement.setString(3, value); statement.executeUpdate();
+                    }
+                }
+            connection.commit(); connection.setAutoCommit(auto);
+        }catch(Exception error){
+            if(connection != null) try{ connection.rollback(); }catch(Exception ignored){}
+            throw error;
+        }finally{
+            if(connection != null) try{ connection.close(); }catch(Exception ignored){}
         }
     }
 
@@ -213,8 +231,8 @@ public final class YZFSqlBackedDatabaseClient implements YZFDatabaseClient{
                     "create table if not exists " + tableName + " (" +
                     "category varchar(255) not null," +
                     "entry_key varchar(255) not null," +
-                    "entry_value longtext not null," +
-                    "updated_at timestamp not null default current_timestamp on update current_timestamp," +
+                    "entry_value " + (isPostgres() ? "text" : "longtext") + " not null," +
+                    "updated_at " + (isPostgres() ? "timestamp not null default current_timestamp" : "timestamp not null default current_timestamp on update current_timestamp") + "," +
                     "primary key (category, entry_key))"
                 );
             }
@@ -223,6 +241,10 @@ public final class YZFSqlBackedDatabaseClient implements YZFDatabaseClient{
 
     private boolean isSqlite(){
         return definition != null && "service-sqlite".equalsIgnoreCase(definition.type);
+    }
+
+    private boolean isPostgres(){
+        return definition != null && ("service-postgresql".equalsIgnoreCase(definition.type) || "postgresql".equalsIgnoreCase(definition.type));
     }
 
     private String normalizeCategory(String category){

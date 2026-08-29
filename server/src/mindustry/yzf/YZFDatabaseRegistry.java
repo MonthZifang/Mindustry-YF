@@ -207,9 +207,11 @@ public final class YZFDatabaseRegistry{
                 array.add(definitionToJson(definition));
             }
             root.put("databases", array);
-            try(Writer writer = new OutputStreamWriter(new FileOutputStream(registryFile.file()), StandardCharsets.UTF_8)){
+            Fi temp = registryFile.sibling(registryFile.name() + ".tmp");
+            try(Writer writer = new OutputStreamWriter(new FileOutputStream(temp.file()), StandardCharsets.UTF_8)){
                 writer.write(root.toString(Jval.Jformat.formatted));
             }
+            if(!temp.file().renameTo(registryFile.file())) java.nio.file.Files.move(temp.file().toPath(), registryFile.file().toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
         }catch(Exception e){
             Log.err("[@] Failed to save database registry", MindustryYZF.name, e);
         }
@@ -240,13 +242,13 @@ public final class YZFDatabaseRegistry{
         YZFDatabaseClient client = clients.get(def.id);
         if(client != null) return client;
         client = createClient(def);
-        clients.put(def.id, client);
         try{
             client.start();
+            clients.put(def.id, client);
         }catch(Exception e){
             Log.err("[@] Failed to start database @", MindustryYZF.name, def.id, e);
         }
-        return client;
+        return clients.get(def.id);
     }
 
     private YZFDatabaseClient requireClient(String id){
@@ -254,7 +256,9 @@ public final class YZFDatabaseRegistry{
         if(def == null){
             throw new IllegalStateException("Unknown database: " + id);
         }
-        return ensureClient(def);
+        YZFDatabaseClient client = ensureClient(def);
+        if(client == null) throw new IllegalStateException("Database is unavailable: " + id);
+        return client;
     }
 
     private YZFDatabaseClient createClient(YZFDatabaseDefinition def){

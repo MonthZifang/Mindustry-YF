@@ -86,6 +86,7 @@ import com.sun.net.httpserver.HttpServer;
  *   subscribers so modules can make shaping decisions from real traffic.
  */
 public final class YZFNetGateway{
+    private static final int MAX_HTTP_BODY_BYTES = 2 * 1024 * 1024;
     private static final int DISPATCH_QUEUE_CAPACITY = 16384;
     private static final int MAX_EVENT_LINE_CHARS = 1024 * 1024;
 
@@ -219,6 +220,11 @@ public final class YZFNetGateway{
 
         installEventHandlers();
         scanNetModules();
+        loadTrafficPolicy();
+        if(fullControl && netModules.isEmpty() && processDefinitions.isEmpty()){
+            Log.warn("[NetGateway] fullControl 已请求但没有可用核心网络模块，已自动关闭以避免丢包。");
+            fullControl = false;
+        }
 
         if(httpEnabled){
             try{
@@ -1671,8 +1677,11 @@ public final class YZFNetGateway{
 
     private void applyTrafficPolicies(){
         if(Vars.net == null) return;
-        if(!trafficPolicyEnabled) return;
         for(NetConnection connection : Vars.net.getConnections()){
+            if(!trafficPolicyEnabled){
+                connection.configureTrafficShaping(false, 1024L * 1024L, 1024, 100);
+                continue;
+            }
             String uuid = normalizeUuid(connection.uuid);
             TrafficSettings s = playerSettings.get(uuid);
             if(s == null) s = defaultSettings;
@@ -1692,6 +1701,45 @@ public final class YZFNetGateway{
         if(Vars.net == null) return;
         for(NetConnection connection : Vars.net.getConnections()){
             connection.configureTrafficShaping(false, 1024L * 1024L, 1024, 100);
+        }
+    }
+
+    private Fi trafficPolicyFile(){
+        return paths.configDir.child("traffic-policy.json");
+    }
+
+    private void loadTrafficPolicy(){
+        Fi file = trafficPolicyFile();
+        if(!file.exists()) return;
+        try{
+            Jval root = Jval.read(file.readString("UTF-8"));
+            trafficPolicyEnabled = root.getBool("enabled", false);
+            Jval defaults = root.get("defaults");
+            TrafficSettings loaded = new TrafficSettings();
+            loaded.parse(defaults != null && defaults.isObject() ? defaults : root, null);
+            ConcurrentHashMap<String, TrafficSettings> players = new ConcurrentHashMap<>();
+            Jval entries = root.get("players");
+            if(entries != null && entries.isObject()) for(var entry : entries.asObject()){
+                String uuid = normalizeUuid(entry.key);
+                if(uuid.isEmpty() || entry.value == null || !entry.value.isObject()) continue;
+                TrafficSettings setting = new TrafficSettings();
+                setting.parse(entry.value, loaded);
+                setting.inheritFrom(loaded);
+                players.put(uuid, setting);
+            }
+            defaultSettings = loaded;
+            playerSettings.clear();
+            playerSettings.putAll(players);
+        }catch(Throwable error){
+            YZFErrorLog.medium("netgateway", "无法读取 traffic-policy.json，使用默认流量策略", error);
+        }
+    }
+
+    private void persistTrafficPolicy(){
+        try{
+            trafficPolicyFile().writeString(currentPolicyJson(), false, "UTF-8");
+        }catch(Throwable error){
+            YZFErrorLog.medium("netgateway", "无法保存 traffic-policy.json", error);
         }
     }
 
@@ -2141,7 +2189,7 @@ public final class YZFNetGateway{
                 case "/yzfnet/kick" -> respond(exchange, 200, handleActionJson("kick", readBody(exchange)));
                 case "/yzfnet/filter" -> respond(exchange, 200, handleActionJson("filter", readBody(exchange)));
                 case "/yzfnet/say" -> respond(exchange, 200, handleActionJson("broadcast", readBody(exchange)));
-                case "/yzfnet/dashboard" -> respond(exchange, 200, DASHBOARD_HTML);
+                case "/yzfnet/dashboard" -> respond(exchange, 200, DASHBOARD_HTML, "text/html; charset=utf-8");
                 case "/yzfnet/traffic" -> respond(exchange, 200, "{\"ok\":true," + trafficStatsFieldsJson() + "}");
                 case "/yzfnet/trafficpolicy" -> respond(exchange, 200, handleActionJson("trafficPolicy", readBody(exchange)));
                 case "/yzfnet/policy" -> respond(exchange, 200, currentPolicyJson());
@@ -2159,7 +2207,8 @@ public final class YZFNetGateway{
             }
         }catch(Throwable error){
             try{
-                respond(exchange, 500, "{\"ok\":false,\"error\":\"" + escape(YZFText.blank(error.getMessage()) ? error.getClass().getSimpleName() : error.getMessage()) + "\"}");
+                boolean tooLarge = error instanceof IOException && "request body too large".equals(error.getMessage());
+                respond(exchange, tooLarge ? 413 : 500, "{\"ok\":false,\"error\":\"" + escape(YZFText.blank(error.getMessage()) ? error.getClass().getSimpleName() : error.getMessage()) + "\"}");
             }catch(Throwable ignored){
             }
         }finally{
@@ -2168,8 +2217,21 @@ public final class YZFNetGateway{
     }
 
     private String readBody(HttpExchange exchange) throws IOException{
-        byte[] bytes = exchange.getRequestBody().readAllBytes();
-        return new String(bytes, StandardCharsets.UTF_8);
+        String length = exchange.getRequestHeaders().getFirst("Content-Length");
+        if(length != null){
+            try{ if(Long.parseLong(length) > MAX_HTTP_BODY_BYTES) throw new IOException("request body too large"); }
+            catch(NumberFormatException ignored){ }
+        }
+        try(var input = exchange.getRequestBody(); var output = new java.io.ByteArrayOutputStream()){
+            byte[] buffer = new byte[8192];
+            int total = 0, read;
+            while((read = input.read(buffer)) != -1){
+                total += read;
+                if(total > MAX_HTTP_BODY_BYTES) throw new IOException("request body too large");
+                output.write(buffer, 0, read);
+            }
+            return output.toString(StandardCharsets.UTF_8);
+        }
     }
 
     private void cors(HttpExchange exchange){
@@ -2179,9 +2241,14 @@ public final class YZFNetGateway{
     }
 
     private void respond(HttpExchange exchange, int code, String body) throws IOException{
+        respond(exchange, code, body, "application/json; charset=utf-8");
+    }
+
+    private void respond(HttpExchange exchange, int code, String body, String contentType) throws IOException{
         cors(exchange);
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        exchange.getResponseHeaders().set("Content-Type", contentType);
         exchange.sendResponseHeaders(code, bytes.length);
         exchange.getResponseBody().write(bytes);
     }
@@ -2578,6 +2645,7 @@ public final class YZFNetGateway{
                 playerSettings.putAll(newPlayers);
                 playerTrafficRules.clear();
                 playerTrafficRules.putAll(newPlayerRules);
+                persistTrafficPolicy();
 
                 Core.app.post(this::applyTrafficPolicies);
                 return "\"ok\":true,\"enabled\":" + trafficPolicyEnabled

@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 public final class YZFRemoteJsonDatabaseClient implements YZFDatabaseClient{
@@ -36,7 +37,9 @@ public final class YZFRemoteJsonDatabaseClient implements YZFDatabaseClient{
 
     @Override
     public boolean healthy(){
-        return !YZFText.blank(endpoint());
+        if(YZFText.blank(endpoint())) return false;
+        try{ request("GET", "/categories", null); return true; }
+        catch(Exception ignored){ return false; }
     }
 
     @Override
@@ -105,7 +108,9 @@ public final class YZFRemoteJsonDatabaseClient implements YZFDatabaseClient{
                 out.write(bytes);
             }
         }
-        InputStream stream = connection.getResponseCode() >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        int status = connection.getResponseCode();
+        if(status < 200 || status >= 300) throw new java.io.IOException("Remote JSON database HTTP " + status);
+        InputStream stream = connection.getInputStream();
         if(stream == null) return "";
         try(InputStream input = stream){
             byte[] bytes = input.readNBytes(maxPayloadBytes + 1);
@@ -122,6 +127,7 @@ public final class YZFRemoteJsonDatabaseClient implements YZFDatabaseClient{
 
     private String encode(String value){
         if(value == null) return "";
-        return value.replace("/", "%2F").replace(" ", "%20");
+        try{return URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20");}
+        catch(Exception e){throw new IllegalArgumentException("invalid database path segment", e);}
     }
 }
