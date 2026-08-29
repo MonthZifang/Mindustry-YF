@@ -8,6 +8,9 @@ import mindustry.core.Version;
 import mindustry.game.EventType.PlayerJoin;
 import mindustry.game.EventType.PlayerLeave;
 import mindustry.game.EventType.ResetEvent;
+import mindustry.game.EventType.UnitSpawnEvent;
+import mindustry.core.PerformanceSettings;
+import mindustry.gen.Groups;
 import mindustry.gen.Call;
 import mindustry.net.Administration.Config;
 import mindustry.server.ServerControl;
@@ -30,6 +33,7 @@ public final class MindustryYZF{
     private static Cons<ResetEvent> resetHandler;
     private static Cons<PlayerJoin> playerJoinHandler;
     private static Cons<PlayerLeave> playerLeaveHandler;
+    private static Cons<UnitSpawnEvent> performanceUnitHandler;
 
     /** 玩家进出去重集合：记录已知在线玩家 UUID，防止换图后重复公告。 */
     private static final Set<String> connectedPlayers = ConcurrentHashMap.newKeySet();
@@ -117,6 +121,14 @@ public final class MindustryYZF{
         };
         Events.on(PlayerLeave.class, playerLeaveHandler);
 
+        performanceUnitHandler = event -> {
+            if(event == null || event.unit == null) return;
+            int limit = event.unit.team == Vars.state.rules.waveTeam && PerformanceSettings.enemyUnitLimit > 0
+                ? PerformanceSettings.enemyUnitLimit : PerformanceSettings.unitLimit(event.unit.team);
+            if(limit > 0 && event.unit.team.data().unitCount > limit && !event.unit.isPlayer()) event.unit.kill();
+        };
+        Events.on(UnitSpawnEvent.class, performanceUnitHandler);
+
         bootstrapped = true;
         audit.record("boot", name, "runtime=" + runtime.mode());
 
@@ -186,6 +198,7 @@ public final class MindustryYZF{
             if(context != null){
                 context.audit.record("shutdown", name, "server stopping");
             }
+            if(performanceUnitHandler != null) Events.remove(UnitSpawnEvent.class, performanceUnitHandler);
         }catch(Throwable error){
             YZFErrorLog.high(name, "Failed to write shutdown audit record", error);
         }

@@ -8,6 +8,7 @@ import arc.util.serialization.Jval;
 import mindustry.gen.Groups;
 import mindustry.gen.Player;
 import mindustry.net.YZFNetworkMetrics;
+import mindustry.server.ServerPerformanceConfig;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -75,6 +76,7 @@ public final class YZFServerCommands{
             case "dbs", "databases", "数据库" -> printDatabases(context);
             case "uuid" -> printDatabasePlayersWithUuid(context, args);
             case "net", "netgateway", "网络模块" -> handleNetGateway(context, args);
+            case "performance", "性能" -> handlePerformance(args);
             default -> {
                 String resolvedDatabaseId = resolveDatabaseAlias(context, action);
                 if(resolvedDatabaseId != null){
@@ -147,7 +149,19 @@ public final class YZFServerCommands{
             new HelpEntry("database", "yzf <数据库别名> [页码]", "分页查看数据库中的玩家信息。"),
             new HelpEntry("uuid", "yzf uuid <数据库别名> [页码]", "分页查看数据库中的玩家信息，并额外显示原生 UUID。"),
             new HelpEntry("net", "yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>|log <id|all> <on|off|status>|enable <id>|disable <id>]", "管理外部网络模块网关与核心网络模块（热添加/热替换/热移除/日志开关/启用禁用）。")
+            ,new HelpEntry("performance", "yzf performance [reload]", "查看或重载服务端性能增强配置。")
         };
+    }
+
+    private static void handlePerformance(String[] args){
+        if(args.length >= 2 && (args[1].equalsIgnoreCase("reload") || args[1].equals("重载"))){
+            ServerPerformanceConfig.apply();
+            Log.info("[@] 性能配置已重载。", MindustryYZF.name);
+        }else{
+            Log.info("[@] 性能配置文件: config/yzf/performance.hjson", MindustryYZF.name);
+            Log.info("当前状态: @", ServerPerformanceConfig.status());
+            Log.info("用法: yzf performance reload");
+        }
     }
 
     private static void printOpenApiHelp(String pageArg){
