@@ -88,6 +88,7 @@ public final class YZFDriverRegistry{
             case "mysql" -> "mysql-default";
             case "mariadb" -> "mariadb-default";
             case "postgresql", "postgres" -> "postgresql-default";
+            case "sqlserver", "mssql" -> "sqlserver-default";
             case "redis" -> "redis-default";
             case "minio" -> "minio-default";
             default -> null;

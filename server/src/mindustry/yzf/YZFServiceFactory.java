@@ -53,6 +53,8 @@ public final class YZFServiceFactory{
         register("mariadb", config -> new YZFHikariSqlClient(config, "org.mariadb.jdbc.Driver", driverRegistry));
         register("postgresql", config -> new YZFHikariSqlClient(config, "org.postgresql.Driver", driverRegistry));
         register("postgres", config -> new YZFHikariSqlClient(config, "org.postgresql.Driver", driverRegistry));
+        register("sqlserver", config -> new YZFHikariSqlClient(config, "com.microsoft.sqlserver.jdbc.SQLServerDriver", driverRegistry));
+        register("mssql", config -> new YZFHikariSqlClient(config, "com.microsoft.sqlserver.jdbc.SQLServerDriver", driverRegistry));
         register("sqlite", config -> new YZFSqliteClient(config));
         register("redis", config -> new YZFRedisClient(config, driverRegistry));
         register("remotehttp", config -> new YZFRemoteHttpClient(config));

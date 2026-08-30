@@ -7,6 +7,7 @@ configurations{
     yzfMysqlDriver
     yzfMariadbDriver
     yzfPostgresqlDriver
+    yzfSqlserverDriver
     yzfRedisDriver
     yzfMinioDriver
 }
@@ -86,7 +87,7 @@ tasks.register('dist', Jar){
 }
 
 tasks.register('yzfDriverBundles'){
-    dependsOn configurations.yzfMysqlDriver, configurations.yzfMariadbDriver, configurations.yzfPostgresqlDriver, configurations.yzfRedisDriver, configurations.yzfMinioDriver
+    dependsOn configurations.yzfMysqlDriver, configurations.yzfMariadbDriver, configurations.yzfPostgresqlDriver, configurations.yzfSqlserverDriver, configurations.yzfRedisDriver, configurations.yzfMinioDriver
 
     doLast{
         def outputRoot = file("$buildDir/yzf-driver-bundles")
@@ -96,6 +97,7 @@ tasks.register('yzfDriverBundles'){
             'mysql-default': configurations.yzfMysqlDriver,
             'mariadb-default': configurations.yzfMariadbDriver,
             'postgresql-default': configurations.yzfPostgresqlDriver,
+            'sqlserver-default': configurations.yzfSqlserverDriver,
             'redis-default': configurations.yzfRedisDriver,
             'minio-default': configurations.yzfMinioDriver
         ].each{ driverId, conf ->
@@ -161,6 +163,7 @@ dependencies{
     yzfMysqlDriver "com.mysql:mysql-connector-j:9.4.0"
     yzfMariadbDriver "org.mariadb.jdbc:mariadb-java-client:3.5.6"
     yzfPostgresqlDriver "org.postgresql:postgresql:42.7.8"
+    yzfSqlserverDriver "com.microsoft.sqlserver:mssql-jdbc:13.2.0.jre11"
     yzfRedisDriver "redis.clients:jedis:6.1.0"
     yzfMinioDriver "io.minio:minio:8.5.17"
 }

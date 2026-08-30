@@ -463,7 +463,7 @@ public final class MindustryYZF{
                 "# YZF external drivers\n" +
                 "\n" +
                 "The server keeps only SQLite and local JSON built in.\n" +
-                "MySQL, MariaDB, PostgreSQL, Redis, and MinIO are loaded from this directory.\n" +
+                "MySQL, MariaDB, PostgreSQL, SQL Server, Redis, and MinIO are loaded from this directory.\n" +
                 "\n" +
                 "1. Build optional driver bundles with `./gradlew server:yzfDriverBundles` (Windows: `gradlew.bat server:yzfDriverBundles`).\n" +
                 "2. Copy one of the generated folders from `server/build/yzf-driver-bundles/` into this directory.\n" +
@@ -473,6 +473,7 @@ public final class MindustryYZF{
                 "- mysql-default/\n" +
                 "- mariadb-default/\n" +
                 "- postgresql-default/\n" +
+                "- sqlserver-default/\n" +
                 "- redis-default/\n" +
                 "- minio-default/\n"
             );
@@ -508,6 +509,15 @@ public final class MindustryYZF{
                 "      path: \"postgresql-default\"\n" +
                 "      driverClassName: \"org.postgresql.Driver\"\n" +
                 "      serviceTypes: [\"postgresql\", \"postgres\"]\n" +
+                "    },\n" +
+                "    {\n" +
+                "      id: \"sqlserver-default\"\n" +
+                "      type: \"jdbc\"\n" +
+                "      enabled: true\n" +
+                "      description: \"External Microsoft SQL Server JDBC driver bundle\"\n" +
+                "      path: \"sqlserver-default\"\n" +
+                "      driverClassName: \"com.microsoft.sqlserver.jdbc.SQLServerDriver\"\n" +
+                "      serviceTypes: [\"sqlserver\", \"mssql\"]\n" +
                 "    },\n" +
                 "    {\n" +
                 "      id: \"redis-default\"\n" +
@@ -616,6 +626,28 @@ public final class MindustryYZF{
             );
         }
 
+        arc.files.Fi sqlserver = paths.servicesDir.child("sqlserver-default.hjson");
+        if(!sqlserver.exists()){
+            sqlserver.writeString(
+                "# Microsoft SQL Server player storage template\n" +
+                "# 默认关闭。如需启用，把 enabled 改成 true，并在 player-storage.hjson 中选择本服务。\n" +
+                "{\n" +
+                "  id: \"player-sqlserver\"\n" +
+                "  type: \"sqlserver\"\n" +
+                "  driverId: \"sqlserver-default\"\n" +
+                "  enabled: false\n" +
+                "  endpoint: \"127.0.0.1:1433\"\n" +
+                "  database: \"mindustry_player\"\n" +
+                "  username: \"sa\"\n" +
+                "  password: \"change-me\"\n" +
+                "  options: [\n" +
+                "    \"encrypt=false\"\n" +
+                "    \"trustServerCertificate=true\"\n" +
+                "  ]\n" +
+                "}\n"
+            );
+        }
+
         arc.files.Fi sqlite = paths.servicesDir.child("sqlite-default.hjson");
         if(!sqlite.exists()){
             sqlite.writeString(
@@ -691,7 +723,7 @@ public final class MindustryYZF{
                 "{\n" +
                 "  enabled: true\n" +
                 "  serviceId: \"player-sqlite\"\n" +
-                "  allowedTypes: [\"sqlite\", \"mysql\", \"mariadb\", \"postgresql\"]\n" +
+                "  allowedTypes: [\"sqlite\", \"mysql\", \"mariadb\", \"postgresql\", \"sqlserver\", \"mssql\"]\n" +
                 "  note: \"Choose exactly one player storage database service and set enabled=true.\"\n" +
                 "}\n"
             );
@@ -777,6 +809,7 @@ public final class MindustryYZF{
                 "- config/services/minio-default.hjson (disabled by default)\n" +
                 "- config/services/mysql-default.hjson (disabled by default)\n" +
                 "- config/services/postgresql-default.hjson (disabled by default)\n" +
+                "- config/services/sqlserver-default.hjson (disabled by default)\n" +
                 "- config/services/redis-default.hjson (disabled by default)\n" +
                 "- config/services/sqlite-default.hjson (enabled by default)\n" +
                 "- config/drivers/driver-index.hjson\n" +

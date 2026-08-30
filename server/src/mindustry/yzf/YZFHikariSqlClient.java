@@ -149,6 +149,8 @@ public final class YZFHikariSqlClient implements YZFSqlClient{
         String protocol;
         if("mariadb".equalsIgnoreCase(config.type)){
             protocol = "mariadb";
+        }else if("sqlserver".equalsIgnoreCase(config.type) || "mssql".equalsIgnoreCase(config.type)){
+            protocol = "sqlserver";
         }else if("postgresql".equalsIgnoreCase(config.type) || "postgres".equalsIgnoreCase(config.type)){
             protocol = "postgresql";
         }else{
@@ -156,14 +158,13 @@ public final class YZFHikariSqlClient implements YZFSqlClient{
         }
         String target = endpoint == null ? "" : endpoint.trim();
         if(YZFText.blank(target)){
-            target = "postgresql".equals(protocol) ? "127.0.0.1:5432" : "127.0.0.1:3306";
+            target = "postgresql".equals(protocol) ? "127.0.0.1:5432" : ("sqlserver".equals(protocol) ? "127.0.0.1:1433" : "127.0.0.1:3306");
         }
-
-        StringBuilder url = new StringBuilder("jdbc:" + protocol + "://" + target + "/" + config.database);
+        StringBuilder url = new StringBuilder("jdbc:" + protocol + "://" + target + ("sqlserver".equals(protocol) ? ";databaseName=" + config.database : "/" + config.database));
         boolean first = true;
         for(String option : config.options){
             if(option == null || option.trim().isEmpty() || option.startsWith("proxy")) continue;
-            url.append(first ? "?" : "&").append(option.trim());
+            url.append("sqlserver".equals(protocol) ? ";" : (first ? "?" : "&")).append(option.trim());
             first = false;
         }
         return url.toString();

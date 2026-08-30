@@ -28,6 +28,7 @@ public final class YZFServiceConfig{
     public YZFServiceType typeEnum(){
         if(YZFText.blank(type)) return null;
         String normalized = type.trim();
+        if("mssql".equalsIgnoreCase(normalized)) return YZFServiceType.sqlserver;
         for(YZFServiceType value : YZFServiceType.values()){
             if(value.name().equalsIgnoreCase(normalized)){
                 return value;

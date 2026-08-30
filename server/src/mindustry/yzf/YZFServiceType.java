@@ -5,6 +5,7 @@ public enum YZFServiceType{
     mysql,
     mariadb,
     postgresql,
+    sqlserver,
     sqlite,
     redis,
     remoteHttp

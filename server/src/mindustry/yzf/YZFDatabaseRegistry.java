@@ -161,6 +161,13 @@ public final class YZFDatabaseRegistry{
         return definitions.size;
     }
 
+    /** Creates a non-blocking facade that can fan out operations to several backends. */
+    public synchronized YZFAggregatedDatabase aggregate(String... ids){
+        java.util.List<String> selected = new java.util.ArrayList<>();
+        if(ids != null) for(String id : ids) if(id != null && has(id)) selected.add(id);
+        return new YZFAggregatedDatabase(this, selected);
+    }
+
     public synchronized void shutdown(){
         stopAll();
         clients.clear();
@@ -330,7 +337,7 @@ public final class YZFDatabaseRegistry{
         for(YZFServiceClient service : serviceRegistry.all()){
             if(!(service instanceof YZFSqlClient sqlClient)) continue;
             YZFServiceType type = service.config().typeEnum();
-            if(type != YZFServiceType.mysql && type != YZFServiceType.mariadb && type != YZFServiceType.sqlite && type != YZFServiceType.postgresql) continue;
+            if(type != YZFServiceType.mysql && type != YZFServiceType.mariadb && type != YZFServiceType.sqlite && type != YZFServiceType.postgresql && type != YZFServiceType.sqlserver) continue;
 
             YZFDatabaseDefinition definition = new YZFDatabaseDefinition();
             definition.id = "service-" + service.config().id;

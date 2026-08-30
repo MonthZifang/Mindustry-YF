@@ -118,6 +118,14 @@ public final class YZFSqlBackedDatabaseClient implements YZFDatabaseClient{
                     "on conflict(category, entry_key) do update set entry_value = excluded.entry_value")){
                     statement.setString(1, normalizedCategory); statement.setString(2, normalizedKey); statement.setString(3, normalizedValue); statement.executeUpdate();
                 }
+            }else if(isSqlServer()){
+                try(PreparedStatement statement = connection.prepareStatement(
+                    "merge " + tableName + " as target using (select ? as category, ? as entry_key, ? as entry_value) as source " +
+                    "on target.category = source.category and target.entry_key = source.entry_key " +
+                    "when matched then update set entry_value = source.entry_value, updated_at = current_timestamp " +
+                    "when not matched then insert (category, entry_key, entry_value) values (source.category, source.entry_key, source.entry_value);")){
+                    statement.setString(1, normalizedCategory); statement.setString(2, normalizedKey); statement.setString(3, normalizedValue); statement.executeUpdate();
+                }
             }else{
                 try(PreparedStatement statement = connection.prepareStatement(
                     "insert into " + tableName + " (category, entry_key, entry_value) values (?, ?, ?) " +
@@ -231,8 +239,8 @@ public final class YZFSqlBackedDatabaseClient implements YZFDatabaseClient{
                     "create table if not exists " + tableName + " (" +
                     "category varchar(255) not null," +
                     "entry_key varchar(255) not null," +
-                    "entry_value " + (isPostgres() ? "text" : "longtext") + " not null," +
-                    "updated_at " + (isPostgres() ? "timestamp not null default current_timestamp" : "timestamp not null default current_timestamp on update current_timestamp") + "," +
+                    "entry_value " + (isPostgres() ? "text" : (isSqlServer() ? "nvarchar(max)" : "longtext")) + " not null," +
+                    "updated_at " + (isPostgres() ? "timestamp not null default current_timestamp" : (isSqlServer() ? "datetime2 not null default current_timestamp" : "timestamp not null default current_timestamp on update current_timestamp")) + "," +
                     "primary key (category, entry_key))"
                 );
             }
@@ -245,6 +253,10 @@ public final class YZFSqlBackedDatabaseClient implements YZFDatabaseClient{
 
     private boolean isPostgres(){
         return definition != null && ("service-postgresql".equalsIgnoreCase(definition.type) || "postgresql".equalsIgnoreCase(definition.type));
+    }
+
+    private boolean isSqlServer(){
+        return definition != null && ("service-sqlserver".equalsIgnoreCase(definition.type) || "sqlserver".equalsIgnoreCase(definition.type) || "mssql".equalsIgnoreCase(definition.type));
     }
 
     private String normalizeCategory(String category){
