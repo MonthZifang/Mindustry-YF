@@ -28,6 +28,8 @@ import java.util.concurrent.*;
 import static mindustry.Vars.*;
 
 public class ArcNetProvider implements NetProvider{
+    public static final int clientReadBufferSize = 25_000;
+
     final Client client;
     final Prov<DatagramPacket> packetSupplier = () -> new DatagramPacket(new byte[512], 512);
 
@@ -60,7 +62,7 @@ public class ArcNetProvider implements NetProvider{
             packetSpamLimit = Config.packetSpamLimit.num();
         });
 
-        client = new Client(16384, 16384, new PacketSerializer()){
+        client = new Client(16384, clientReadBufferSize, new PacketSerializer()){
             @Override
             public void handleNetException(ArcNetException e){
                 //allow occasional UDP network errors
@@ -108,7 +110,8 @@ public class ArcNetProvider implements NetProvider{
             }
         });
 
-        server = new Server(32768, 16384, new PacketSerializer()){
+        //include extra 16kb headroom for when the write buffer is full
+        server = new Server(clientReadBufferSize + 16_000, 16384, new PacketSerializer()){
             @Override
             protected Connection newConnection(){
                 return new ShapedConnection();
@@ -341,8 +344,7 @@ public class ArcNetProvider implements NetProvider{
 
     @Override
     public void sendAllServer(Object object, Iterable<NetConnection> connections, boolean reliable){
-        // Preserve packet metadata for shaped connections. This lets the connection
-        // safely replace stale complete state snapshots before they enter the TCP stream.
+        //build up list of underlying arcnet connections for faster bulk transfer
         var cons = writeConnections.get();
         cons.clear();
         for(var con : connections){
@@ -394,22 +396,11 @@ public class ArcNetProvider implements NetProvider{
             return;
         }
 
-        var cons = writeConnections.get();
-        cons.clear();
-        for(var ac : connections){
-            if(ac == con) continue;
-            if(ac.trafficShapingEnabled()){
-                if(reliable) ac.connection.sendTCP(object);
-                else ac.connection.sendUDP(object);
-            }else{
-                cons.add(ac.connection);
-            }
+        if(reliable){
+            server.sendToAllExceptTCP(con.connection.getID(), object);
+        }else{
+            server.sendToAllExceptUDP(con.connection.getID(), object);
         }
-        if(!cons.isEmpty()){
-            if(reliable) server.sendToAllTCP(object, cons);
-            else server.sendToAllUDP(object, cons);
-        }
-        cons.clear();
     }
 
     @Override
@@ -463,6 +454,7 @@ public class ArcNetProvider implements NetProvider{
         @Override
         public void sendStream(Streamable stream){
             if(SendStreamEvent.emit(this, stream, stream.stream == null ? 0 : stream.stream.available())) return;
+            //listeners are processed in the order they're added and each reads into the buffer greedily before the next gets a turn, so concurrent streams are sent in FIFO order
             connection.addListener(new InputStreamSender(stream.stream, 1024){
                 int id;
 

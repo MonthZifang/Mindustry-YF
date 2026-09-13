@@ -9,7 +9,6 @@ import mindustry.*;
 import mindustry.annotations.Annotations.*;
 import mindustry.content.*;
 import mindustry.entities.*;
-import mindustry.core.PerformanceSettings;
 import mindustry.game.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
@@ -39,7 +38,6 @@ abstract class FireComp implements Timedc, Posc, Syncc, Drawc{
 
     @Override
     public void update(){
-
         animation += Time.delta / ticksPerFrame;
         warmup += Time.delta;
         animation %= frames;
@@ -87,7 +85,7 @@ abstract class FireComp implements Timedc, Posc, Syncc, Drawc{
         }
 
         //apply damage to nearby units & building
-        if((damageTimer += Time.delta) >= damageDelay * PerformanceSettings.fireDamageIntervalMultiplier){
+        if((damageTimer += Time.delta) >= damageDelay){
             damageTimer = 0f;
             Puddle p = Puddles.get(tile);
             puddleFlammability = p != null ? p.getFlammability() / 3f : 0;

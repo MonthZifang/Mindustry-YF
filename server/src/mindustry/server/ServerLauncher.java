@@ -97,6 +97,7 @@ public class ServerLauncher implements ApplicationListener{
         content.init();
 
         ServerPerformanceConfig.apply();
+        ServerBrandingConfig.apply();
 
         if(mods.hasContentErrors()){
             err("Error occurred loading mod content:");

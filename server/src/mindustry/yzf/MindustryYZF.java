@@ -397,7 +397,7 @@ public final class MindustryYZF{
                 "and the file watcher will reload YZF modules automatically.\n" +
                 "\n" +
                 "- 00-legacy-api.js: shared legacy globals and helpers.\n" +
-                "- versions/159.7-interface.js: mappings for this Mindustry build.\n" +
+                "- versions/160.3-interface.js: mappings for this Mindustry build.\n" +
                 "\n" +
                 "Use this directory to map old plugin APIs to new Mindustry/YZF APIs when behavior did not really change.\n"
             );
@@ -408,7 +408,7 @@ public final class MindustryYZF{
             middleware.writeString(
                 "// External hot-reloadable compatibility middleware for legacy YZF plugins.\n" +
                 "// This file is evaluated before every YZF module script. Add API aliases here\n" +
-                "// when 159.7 moves a Mindustry/Arc/YZF symbol without changing behavior.\n" +
+                "// when 160.3 moves a Mindustry/Arc/YZF symbol without changing behavior.\n" +
                 "yzfCompat.install(function(yzf, yzfModule, compat, global){\n" +
                 "  compat.alias('Core', Packages.arc.Core);\n" +
                 "  compat.alias('Events', Packages.arc.Events);\n" +
@@ -427,10 +427,10 @@ public final class MindustryYZF{
 
         arc.files.Fi versionsDir = paths.compatDir.child("versions");
         versionsDir.mkdirs();
-        arc.files.Fi versionMiddleware = versionsDir.child("159.7-interface.js");
+        arc.files.Fi versionMiddleware = versionsDir.child("160.3-interface.js");
         if(!versionMiddleware.exists()){
             versionMiddleware.writeString(
-                "// Mindustry 159.7 external interface adapter.\n" +
+                "// Mindustry 160.3 external interface adapter.\n" +
                 "// Edit this file after the server starts to adapt old plugin APIs without rebuilding the server.\n" +
                 "// Saving this file triggers YZF hot reload through the file watcher.\n" +
                 "\n" +

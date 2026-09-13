@@ -49,11 +49,6 @@ buildSrc/
 *.gif
 /tests/out
 
-# Local AI chat records
-**/欲眠/
-**/*AI聊天记录*
-**/*AI*聊天记录*
-
 /core/assets/basepartnames
 version.properties
 
@@ -176,21 +171,7 @@ core/assets/logicids.dat
 
 # project files for the sectors
 core/assets-raw/sprites/ui/sectors/*.json
-
-
-
-
-
-# AI & Agent config
-.claude/
-**/.claude/
-
-# C/C++ compiled binaries
-*.obj
-*.exe
-
-# 重要即屏蔽
-server/build/
-server/build/libs/
-**/server/build/libs/
-**/server/build/libs/**
+# local net module binaries
+core-network-modules/**/*.exe
+core-network-modules/**/*.obj
+core-network-modules/**/*.tmp.exe

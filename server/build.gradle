@@ -86,6 +86,15 @@ tasks.register('dist', Jar){
     }
 }
 
+// Keep the conventional `:server:jar` entry point useful without allowing the
+// thin Java-library jar to overwrite the executable distribution produced by
+// `dist`.  Running `:server:jar` now also builds server-release.jar (with its
+// Main-Class manifest) and leaves the thin artifact under a distinct name.
+tasks.named('jar'){
+    archiveFileName = 'server-thin.jar'
+    dependsOn tasks.named('dist')
+}
+
 tasks.register('yzfDriverBundles'){
     dependsOn configurations.yzfMysqlDriver, configurations.yzfMariadbDriver, configurations.yzfPostgresqlDriver, configurations.yzfSqlserverDriver, configurations.yzfRedisDriver, configurations.yzfMinioDriver
 

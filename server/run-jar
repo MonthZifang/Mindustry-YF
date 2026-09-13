@@ -14,7 +14,7 @@ trap 'stopping=1' INT TERM
 
 while true; do
 #auto-restart until ctrl-c or exit 0
-java -XX:+HeapDumpOnOutOfMemoryError -jar "$1"
+java ${JAVA_OPTS:-} --enable-native-access=ALL-UNNAMED -XX:+HeapDumpOnOutOfMemoryError -jar "$1"
 excode=$?
 if [ $stopping -eq 1 ] || [ $excode -eq 0 ] || [ $excode -eq 130 ] || [ $excode -eq 143 ]; then
   exit 0

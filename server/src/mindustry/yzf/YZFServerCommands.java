@@ -8,6 +8,7 @@ import arc.util.serialization.Jval;
 import mindustry.gen.Groups;
 import mindustry.gen.Player;
 import mindustry.net.YZFNetworkMetrics;
+import mindustry.server.ServerBrandingConfig;
 import mindustry.server.ServerPerformanceConfig;
 
 import java.text.SimpleDateFormat;
@@ -29,7 +30,7 @@ public final class YZFServerCommands{
         CommandHandler handler = context.serverControl.handler;
         handler.register(
             "yzf",
-            "[help|status|health|metrics|scan|watch|reload|modules|plugins|mod|info|enable|disable|plugin|commands|services|service|permissions|runtime|audit|verify|api|players|dbs|<databaseAlias>|uuid] [args...]",
+            "[help|status|health|metrics|scan|watch|reload|modules|plugins|mod|info|enable|disable|plugin|commands|services|service|permissions|runtime|audit|verify|api|players|dbs|<databaseAlias>|uuid|branding] [args...]",
             "MindustryYZF 服务端控制命令。使用 `yzf mod help` 查看模块子命令。",
             args -> handleRoot(context, args)
         );
@@ -76,6 +77,7 @@ public final class YZFServerCommands{
             case "dbs", "databases", "数据库" -> printDatabases(context);
             case "uuid" -> printDatabasePlayersWithUuid(context, args);
             case "net", "netgateway", "网络模块" -> handleNetGateway(context, args);
+            case "branding", "品牌" -> handleBranding(args);
             case "performance", "性能" -> handlePerformance(args);
             default -> {
                 String resolvedDatabaseId = resolveDatabaseAlias(context, action);
@@ -149,8 +151,20 @@ public final class YZFServerCommands{
             new HelpEntry("database", "yzf <数据库别名> [页码]", "分页查看数据库中的玩家信息。"),
             new HelpEntry("uuid", "yzf uuid <数据库别名> [页码]", "分页查看数据库中的玩家信息，并额外显示原生 UUID。"),
             new HelpEntry("net", "yzf net [status|start|stop|reload|mods|rescan|restart <id|all>|stopmod <id>|log <id|all> <on|off|status>|enable <id>|disable <id>]", "管理外部网络模块网关与核心网络模块（热添加/热替换/热移除/日志开关/启用禁用）。")
+            ,new HelpEntry("branding", "yzf branding [reload]", "查看或重载服务器列表品牌配置。")
             ,new HelpEntry("performance", "yzf performance [reload]", "查看或重载服务端性能增强配置。")
         };
+    }
+
+    private static void handleBranding(String[] args){
+        if(args.length >= 2 && (args[1].equalsIgnoreCase("reload") || args[1].equals("重载"))){
+            ServerBrandingConfig.apply();
+            Log.info("[@] 服务器列表品牌配置已重载。", MindustryYZF.name);
+        }else{
+            Log.info("[@] 品牌配置文件: config/yzf/server-branding.hjson", MindustryYZF.name);
+            Log.info("当前状态: @", ServerBrandingConfig.status());
+            Log.info("用法: yzf branding reload");
+        }
     }
 
     private static void handlePerformance(String[] args){

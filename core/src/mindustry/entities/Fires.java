@@ -3,7 +3,6 @@ package mindustry.entities;
 import arc.*;
 import arc.util.*;
 import mindustry.content.*;
-import mindustry.core.PerformanceSettings;
 import mindustry.game.EventType.*;
 import mindustry.gen.*;
 import mindustry.world.*;
@@ -21,16 +20,13 @@ public class Fires{
         Fire fire = get(tile);
 
         if(fire == null){
-            if(PerformanceSettings.fireLimit > 0 && Groups.fire.size() >= PerformanceSettings.fireLimit){
-                if(PerformanceSettings.fireLimitDisablesRules) state.rules.fire = false;
-                return;
-            }
             fire = Fire.create();
             fire.tile = tile;
             fire.lifetime = baseLifetime;
             fire.set(tile.worldx(), tile.worldy());
             fire.add();
             set(tile, fire);
+            Events.fire(Trigger.fireCreate);
         }else{
             fire.lifetime = baseLifetime;
             fire.time = 0f;

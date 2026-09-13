@@ -58,6 +58,8 @@ public final class YZFBridge{
     private static final String SOURCES_DIR_NAME = "src";
     private static final String CORE_PACKAGE_PATH = "mindustry/yzf";
     private static final String CLASSES_DIR_NAME = "classes";
+    private static final String REQUIRED_NETGATEWAY_REVISION = "native-hotcompile-v4";
+    private static final String NETGATEWAY_SOURCE = CORE_PACKAGE_PATH + "/YZFNetGateway.java";
 
     /** Narrow view of the core's external access policy so the main jar needs no yzf types. */
     public interface ExternalAccess{
@@ -278,6 +280,7 @@ public final class YZFBridge{
             }
             Log.info("[YZFBridge] 已释放核心模块源码: @", coreSources.absolutePath());
         }
+        refreshStaleNetGatewaySource(srcDir, coreSources);
 
         List<File> sources = new ArrayList<>();
         collectJavaFiles(srcDir.file(), sources);
@@ -361,7 +364,8 @@ public final class YZFBridge{
             "# mode: source = 外加载，编译并加载 core/src 下的原始源码（默认）；\n" +
             "#       internal = 内加载，直接使用主 jar 内嵌的核心类。\n" +
             "# 说明: 首次启动会把主 jar 内嵌的核心源码原封不动释放到 core/src/mindustry/yzf/，\n" +
-            "# 之后启动不会覆盖已有源码；直接修改这些 .java 文件后执行 `yzfcore reload`，\n" +
+            "# 之后通常不会覆盖已有源码；仅当 YZFNetGateway.java 版本过旧时会自动备份并刷新该文件。\n" +
+            "# 直接修改这些 .java 文件后执行 `yzfcore reload`，\n" +
             "# 服务端会重新编译并热重载核心模块（仅 source 模式）。\n" +
             "# 编译输出在 core/classes/，可随时删除让其全量重建。\n" +
             "mode: source\n"
@@ -396,6 +400,49 @@ public final class YZFBridge{
             return true;
         }catch(Throwable error){
             Log.err("[YZFBridge] 释放核心源码失败: @", error);
+            return false;
+        }
+    }
+
+    /**
+     * Existing source-mode installations intentionally retain local edits. The native
+     * hot-compile runtime is a compatibility boundary, so refresh this one source when
+     * it predates the required revision; keep a backup beside it for recovery.
+     */
+    private static void refreshStaleNetGatewaySource(Fi srcDir, Fi coreSources){
+        Fi gateway = coreSources.child("YZFNetGateway.java");
+        if(gateway.exists() && readTextSmart(gateway).contains(REQUIRED_NETGATEWAY_REVISION)) return;
+
+        if(gateway.exists()){
+            Fi backup = gateway.parent().child("YZFNetGateway.java.pre-" + REQUIRED_NETGATEWAY_REVISION + ".bak");
+            if(!backup.exists()) gateway.copyTo(backup);
+            Log.warn("[YZFBridge] 检测到旧版外置网络网关源码，已备份: @", backup.absolutePath());
+        }
+        if(!extractSourceFile(srcDir, NETGATEWAY_SOURCE)){
+            throw new IllegalStateException("无法从主 jar 刷新外置网络网关源码: " + NETGATEWAY_SOURCE);
+        }
+        Log.info("[YZFBridge] 已按当前运行环境更新外置网络网关源码，版本=@", REQUIRED_NETGATEWAY_REVISION);
+    }
+
+    private static boolean extractSourceFile(Fi targetDir, String requiredName){
+        try(InputStream in = YZFBridge.class.getResourceAsStream(SOURCES_RESOURCE)){
+            if(in == null) return false;
+            try(ZipInputStream zip = new ZipInputStream(in)){
+                ZipEntry entry;
+                while((entry = zip.getNextEntry()) != null){
+                    String name = entry.getName().replace('\\', '/');
+                    if(entry.isDirectory() || !name.equals(requiredName)) continue;
+                    Fi out = targetDir.child(name);
+                    out.parent().mkdirs();
+                    try(OutputStream output = out.write(false)){
+                        zip.transferTo(output);
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }catch(Throwable error){
+            Log.err("[YZFBridge] 刷新核心源码失败: @", error);
             return false;
         }
     }

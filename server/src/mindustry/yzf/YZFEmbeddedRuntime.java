@@ -510,6 +510,9 @@ public final class YZFEmbeddedRuntime{
 
         void playerCommand(String name, String usage, String description, BiConsumer<Player, String[]> handler);
 
+        /** Registers a player command even when another module already owns the same name. */
+        void playerCommandOverride(String name, String usage, String description, BiConsumer<Player, String[]> handler);
+
         void adminCommand(String name, String usage, String description, String permission, BiConsumer<Player, String[]> handler);
 
         void after(float delaySeconds, Runnable callback);
@@ -1745,6 +1748,11 @@ public final class YZFEmbeddedRuntime{
         }
 
         @Override
+        public void playerCommandOverride(String name, String usage, String description, BiConsumer<Player, String[]> callback){
+            registerPlayerCommandOverride(name, usage, description, state.definition.meta.permission, false, callback);
+        }
+
+        @Override
         public void adminCommand(String name, String usage, String description, String permission, BiConsumer<Player, String[]> callback){
             registerPlayerCommand(name, usage, description, YZFText.blank(permission) ? state.definition.meta.permission : permission, true, callback);
         }
@@ -2082,6 +2090,15 @@ public final class YZFEmbeddedRuntime{
             if(!present){
                 state.playerCommands.add(new YZFPlayerCommandBinding(commandName, adminOnly, blank(permission)));
             }
+        }
+
+        protected void registerPlayerCommandOverride(String name, String usage, String description, String permission, boolean adminOnly, BiConsumer<Player, String[]> callback){
+            String commandName = normalizeCommand(name);
+            Vars.netServer.clientCommands.removeCommand(commandName);
+            for(int i = state.playerCommands.size - 1; i >= 0; i--){
+                if(state.playerCommands.get(i).name.equalsIgnoreCase(commandName)) state.playerCommands.remove(i);
+            }
+            registerPlayerCommand(commandName, usage, description, permission, adminOnly, callback);
         }
 
         protected String blank(String value){

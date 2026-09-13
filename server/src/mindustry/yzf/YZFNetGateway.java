@@ -36,6 +36,7 @@ import mindustry.net.YZFNetworkMetrics;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -89,6 +90,7 @@ public final class YZFNetGateway{
     private static final int MAX_HTTP_BODY_BYTES = 2 * 1024 * 1024;
     private static final int DISPATCH_QUEUE_CAPACITY = 16384;
     private static final int MAX_EVENT_LINE_CHARS = 1024 * 1024;
+    public static final String NETMOD_RUNTIME_REVISION = "native-hotcompile-v4";
 
     private final YZFPaths paths;
     private final mindustry.server.ServerControl serverControl;
@@ -114,6 +116,22 @@ public final class YZFNetGateway{
     private volatile int splitIntervalMs = 60;      // delay between chunks (internal mode)
     private volatile int splitChunksPerTick = 4;    // max chunks dispatched per tick (internal mode)
     private volatile boolean netmodsAutoRestart = true;
+    private volatile boolean netmodsHotCompile = true;
+    private volatile boolean netmodsCompileC = true;
+    private volatile boolean netmodsCompileCpp = true;
+    private volatile boolean netmodsCompileGo = true;
+    private volatile int netmodsMaxRestartAttempts = 3;
+    private volatile int netmodsRetryIntervalSeconds = 10;
+    private volatile boolean netmodsFallbackToVanilla = true;
+    // Prefer an already-built, OS-compatible executable.  Toolchains are only
+    // required when a binary is missing/incompatible or a source hot-reload is
+    // explicitly requested by the watcher.
+    private volatile boolean netmodsPrecompiledFirst = true;
+    private volatile boolean netmodsCompileIfMissing = true;
+    private volatile String netmodsGoCompiler = "";
+    private volatile String netmodsCCompiler = "";
+    private volatile String netmodsCppCompiler = "";
+    private volatile String netmodsVcvars64 = "";
 
     // Full control mode: when true, the gateway intercepts/cancels all send &
     // receive packets and forwards every packet event to external core modules,
@@ -150,6 +168,10 @@ public final class YZFNetGateway{
     // sees the freshly built binary appear) from kicking off a concurrent compile of
     // the same module.
     private final java.util.Set<String> netModulesCompiling = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> netModulesPendingRetry = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, Integer> netModuleRetryAttempts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> netModuleStartedAt = new ConcurrentHashMap<>();
+    private final AtomicBoolean netmodsVanillaFallback = new AtomicBoolean(false);
     private volatile boolean netmodsHotReload = true;
 
     // Packet filters: "S:"/"R:" + packet simple-name -> drop.
@@ -220,6 +242,7 @@ public final class YZFNetGateway{
 
         installEventHandlers();
         scanNetModules();
+        logNetmodEnvironmentCheck();
         loadTrafficPolicy();
         if(fullControl && netModules.isEmpty() && processDefinitions.isEmpty()){
             Log.warn("[NetGateway] fullControl 已请求但没有可用核心网络模块，已自动关闭以避免丢包。");
@@ -311,7 +334,7 @@ public final class YZFNetGateway{
             for(EmbeddedProcess process : netModuleProcesses){
                 process.destroy();
             }
-            netModuleProcesses.clear();
+        netModuleProcesses.clear();
         }
         if(sendHandler != null){ Events.remove(SendPacketEvent.class, sendHandler); sendHandler = null; }
         if(receiveHandler != null){ Events.remove(ReceivePacketEvent.class, receiveHandler); receiveHandler = null; }
@@ -322,6 +345,10 @@ public final class YZFNetGateway{
         dispatchQueue.clear();
         dispatchQueueSize.set(0);
         pendingChunks.clear();
+        netModulesPendingRetry.clear();
+        netModuleRetryAttempts.clear();
+        netModuleStartedAt.clear();
+        netmodsVanillaFallback.set(false);
         Log.info("[NetGateway] 外部网络模块网关已关闭。");
     }
 
@@ -343,6 +370,13 @@ public final class YZFNetGateway{
         builder.append("核心网络模块: ").append(netModules.size).append(" 个定义, ").append(netModuleProcesses.size).append(" 个运行中").append('\n');
         builder.append("核心模块热加载: ").append(netmodsHotReload ? "启用" : "禁用")
             .append(netModHotReloadWatcher != null && netModHotReloadWatcher.running() ? " (监听中)" : "").append('\n');
+        builder.append("核心模块热编译: ").append(netmodsHotCompile ? "启用" : "禁用")
+            .append(" [C=").append(netmodsCompileC)
+            .append(" C++=").append(netmodsCompileCpp)
+            .append(" Go=").append(netmodsCompileGo).append("]").append('\n');
+        builder.append("核心模块失败重试: ").append(netmodsMaxRestartAttempts).append(" 次 / ")
+            .append(netmodsRetryIntervalSeconds).append(" 秒，原版回退=").append(netmodsFallbackToVanilla)
+            .append(netmodsVanillaFallback.get() ? " (已回退)" : "").append('\n');
         builder.append("内嵌进程: ").append(processDefinitions.size).append(" 个定义, ").append(processes.size).append(" 个运行中").append('\n');
         builder.append("在线外部客户端: ").append(clientCount()).append('\n');
         builder.append("拆包模式: ").append(splitMode)
@@ -380,6 +414,11 @@ public final class YZFNetGateway{
                 "# netmods: 核心网络模块相关开关。\n" +
                 "#   dir: 核心网络模块目录（默认 netmods）；autoRestart: 崩溃后是否自动重启。\n" +
                 "#   hotReload: 是否自动监听目录变化并热加载（重新编译/新增/删除模块后自动生效，无需重启服务端）。\n" +
+                "#   hotCompile: C/C++/Go 源码热编译总开关及分语言开关。\n" +
+                "#   precompiledFirst: 默认优先使用已有且适配当前系统的可执行文件，不检查编译器。\n" +
+                "#   compileIfMissing: 只有找不到可执行文件时才自动编译源码。\n" +
+                "#   toolchain: 可填写未加入 PATH 的 go、C、C++ 和 vcvars64.bat 路径。\n" +
+                "#   retry: 启动失败后每 intervalSeconds 秒重试，达到 maxAttempts 后回退原版网络。\n" +
                 "# splitPolicy: 大包拆分策略。\n" +
                 "#   mode: off=关闭 internal=网关内部定时分片 external=委托外部模块拆分。\n" +
                 "#   threshold: 超过该字符长度的消息包会被拆分。\n" +
@@ -392,7 +431,16 @@ public final class YZFNetGateway{
                 "http: { enabled: true, address: \"localhost\", port: 7100 }\n" +
                 "tcp: { enabled: true, address: \"localhost\", port: 7101 }\n" +
                 "processes: []\n" +
-                "netmods: { dir: \"netmods\", autoRestart: true, hotReload: true }\n" +
+                "netmods: {\n" +
+                "  dir: \"netmods\"\n" +
+                "  autoRestart: true\n" +
+                "  hotReload: true\n" +
+                "  hotCompile: { enabled: true, c: true, cpp: true, go: true }\n" +
+                "  precompiledFirst: true\n" +
+                "  compileIfMissing: true\n" +
+                "  toolchain: { go: \"\", c: \"\", cpp: \"\", vcvars64: \"\" }\n" +
+                "  retry: { maxAttempts: 3, intervalSeconds: 10, fallbackToVanilla: true }\n" +
+                "}\n" +
                 "splitPolicy: { mode: \"internal\", threshold: 200, chunkSize: 100, intervalMs: 60, chunksPerTick: 4 }\n" +
                 "token: \"\"\n" +
                 "observe: { sendPackets: false, receivePackets: true, chat: true, joins: true }\n" +
@@ -410,6 +458,19 @@ public final class YZFNetGateway{
         splitMode = "off"; splitThreshold = 200; splitChunkSize = 100; splitIntervalMs = 60; splitChunksPerTick = 4;
         netmodsAutoRestart = true;
         netmodsHotReload = true;
+        netmodsHotCompile = true;
+        netmodsCompileC = true;
+        netmodsCompileCpp = true;
+        netmodsCompileGo = true;
+        netmodsMaxRestartAttempts = 3;
+        netmodsRetryIntervalSeconds = 10;
+        netmodsFallbackToVanilla = true;
+        netmodsPrecompiledFirst = true;
+        netmodsCompileIfMissing = true;
+        netmodsGoCompiler = "";
+        netmodsCCompiler = "";
+        netmodsCppCompiler = "";
+        netmodsVcvars64 = "";
         fullControl = false;
         String netmodsDir = "netmods";
         processDefinitions.clear();
@@ -444,6 +505,32 @@ public final class YZFNetGateway{
                 if(!dir.isEmpty()) netmodsDir = dir;
                 netmodsAutoRestart = netmods.getBool("autoRestart", true);
                 netmodsHotReload = netmods.getBool("hotReload", true);
+                netmodsPrecompiledFirst = netmods.getBool("precompiledFirst", true);
+                netmodsCompileIfMissing = netmods.getBool("compileIfMissing", true);
+                Jval toolchain = netmods.get("toolchain");
+                if(toolchain != null && toolchain.isObject()){
+                    netmodsGoCompiler = toolchain.getString("go", "").trim();
+                    netmodsCCompiler = toolchain.getString("c", "").trim();
+                    netmodsCppCompiler = toolchain.getString("cpp", "").trim();
+                    netmodsVcvars64 = toolchain.getString("vcvars64", "").trim();
+                }
+                Jval hotCompile = netmods.get("hotCompile");
+                if(hotCompile != null){
+                    if(hotCompile.isBoolean()){
+                        netmodsHotCompile = hotCompile.asBool();
+                    }else if(hotCompile.isObject()){
+                        netmodsHotCompile = hotCompile.getBool("enabled", true);
+                        netmodsCompileC = hotCompile.getBool("c", true);
+                        netmodsCompileCpp = hotCompile.getBool("cpp", true);
+                        netmodsCompileGo = hotCompile.getBool("go", true);
+                    }
+                }
+                Jval retry = netmods.get("retry");
+                if(retry != null && retry.isObject()){
+                    netmodsMaxRestartAttempts = Math.max(0, Math.min(10, retry.getInt("maxAttempts", 3)));
+                    netmodsRetryIntervalSeconds = Math.max(1, Math.min(300, retry.getInt("intervalSeconds", 10)));
+                    netmodsFallbackToVanilla = retry.getBool("fallbackToVanilla", true);
+                }
             }
             Jval split = root.get("splitPolicy");
             if(split != null && split.isObject()){
@@ -506,7 +593,7 @@ public final class YZFNetGateway{
         if(!readme.exists()){
             readme.writeString(
                 "YZF 核心网络模块目录（core network modules）\n" +
-                "每个子文件夹 = 一个核心网络模块（不同于普通插件），支持 C++/Go/Rust 等任意语言。\n" +
+                "每个子文件夹 = 一个核心网络模块（不同于普通插件），支持 C/C++/Go/Rust 等任意语言。\n" +
                 "模块文件夹内需要:\n" +
                 "  netmodule.hjson  - 模块元数据 { id, name, version, priority, enabled, command, args: [...] }\n" +
                 "  command 指向可执行文件（相对本模块文件夹或绝对路径）。\n" +
@@ -515,7 +602,8 @@ public final class YZFNetGateway{
                 "\n" +
                 "热编译（只放源码，自动编译 + 热加载，无需重启服务端）:\n" +
                 "  在 netmodule.hjson 中配置 build 段:\n" +
-                "    build: { type: \"cpp\", source: \"src/main.cpp\" }   # C++ (自动定位 MSVC vcvars64)\n" +
+                "    build: { type: \"c\", source: \"src/main.c\" }       # C   (Windows: MSVC; Linux: gcc)\n" +
+                "    build: { type: \"cpp\", source: \"src/main.cpp\" }   # C++ (Windows: MSVC; Linux: g++)\n" +
                 "    build: { type: \"go\" }                              # Go  (go build -o <command> .)\n" +
                 "    build: { script: \"build.bat\" }                     # 自定义构建脚本\n" +
                 "  修改源码 (.c/.cpp/.h/.go/...) 后网关自动: 停止旧模块 -> 编译 -> 启动新模块。\n" +
@@ -526,7 +614,7 @@ public final class YZFNetGateway{
                 "  yzf net rescan             - 重新扫描目录，热添加新放入的模块\n" +
                 "  yzf net restart <id|all>   - 热重启模块\n" +
                 "  yzf net stopmod <id>       - 热停止某个模块\n" +
-                "模块进程意外退出时网关会每 10 秒检查并自动重启（netmods.autoRestart）。\n"
+                "模块启动/运行失败时按 netmods.retry 限次重试，耗尽后回退原版网络行为。\n"
             );
         }
         if(!dir.exists() || !dir.isDirectory()) return;
@@ -582,10 +670,14 @@ public final class YZFNetGateway{
                     Log.info("[NetGateway] 核心网络模块已跳过（禁用）: @", definition.id);
                     continue;
                 }
-                startNetModuleWithBuild(definition, true);
+                if(!startNetModuleWithBuild(definition, true)){
+                    queueNetModuleRetry(definition.id);
+                }
             }
             if(netmodsAutoRestart){
                 scheduleNetmodRestartCheck();
+            }else if(!netModulesPendingRetry.isEmpty()){
+                Log.warn("[NetGateway] 核心网络模块启动失败，但 netmods.autoRestart=false，不执行重试。");
             }
         }, "YZFNetGateway-NetMods");
         processManagerThread.setDaemon(true);
@@ -598,23 +690,36 @@ public final class YZFNetGateway{
      * Idempotent: if the module is already running (e.g. the file watcher started it
      * while the initial pass was compiling a slower sibling), this does not spawn again.
      */
-    private void startNetModuleWithBuild(NetModuleDefinition definition, boolean logErrors){
-        if(isNetModuleRunning(definition.id)) return;
-        if(hasBuildConfig(definition)){
-            File commandFile = resolveCommandFile(definition);
-            if(!commandFile.exists()){
-                Log.info("[NetGateway] 核心网络模块 @ 缺少二进制，先热编译源码...", definition.id);
-                boolean built = compileNetModule(definition);
-                if(!built && !commandFile.exists()){
-                    if(logErrors){
-                        Log.err("[NetGateway] 核心网络模块 @ 首次编译失败，模块未启动。", definition.id);
-                    }
-                    return;
+    private boolean startNetModuleWithBuild(NetModuleDefinition definition, boolean logErrors){
+        if(netmodsVanillaFallback.get()) return false;
+        if(isNetModuleRunning(definition.id)) return true;
+        File commandFile = resolveCommandFile(definition);
+        boolean incompatible = commandFile.exists() && isNativeBuild(definition) && !isBinaryCompatibleWithCurrentOs(commandFile);
+        if(hotCompileEnabled(definition) && netmodsCompileIfMissing && (!commandFile.exists() || incompatible)){
+            Log.info(incompatible
+                ? "[NetGateway] 核心网络模块 @ 的二进制不适用于当前系统，先重新编译源码..."
+                : "[NetGateway] 核心网络模块 @ 缺少二进制，先热编译源码...", definition.id);
+            boolean built = compileNetModule(definition);
+            if(!built && !isUsableCommand(definition)){
+                if(logErrors){
+                    Log.err("[NetGateway] 核心网络模块 @ 编译失败且没有适用于当前系统的二进制，模块未启动。", definition.id);
                 }
+                return false;
             }
         }
-        if(isNetModuleRunning(definition.id)) return;
+        if(!isUsableCommand(definition)){
+            if(logErrors){
+                if(incompatible && !hotCompileEnabled(definition)){
+                    Log.err("[NetGateway] 核心网络模块 @ 的二进制不适用于当前系统，且热编译开关已关闭。", definition.id);
+                }else{
+                    Log.err("[NetGateway] 核心网络模块 @ 没有可执行文件: @", definition.id, commandFile.getAbsolutePath());
+                }
+            }
+            return false;
+        }
+        if(isNetModuleRunning(definition.id)) return true;
         spawnNetModule(definition);
+        return isNetModuleRunning(definition.id);
     }
 
     /** True when a live process for the given core module id is registered. */
@@ -630,34 +735,100 @@ public final class YZFNetGateway{
     private void scheduleNetmodRestartCheck(){
         if(netmodRestartTask != null) return;
         netmodRestartTask = Timer.schedule(() -> {
-            if(!running.get()) return;
-            // Collect dead modules under the lock, then restart outside it so a
-            // (potentially slow) hot compile never blocks netModuleProcesses access.
-            Seq<String> dead = new Seq<>();
+            if(!running.get() || netmodsVanillaFallback.get()) return;
+            long now = System.currentTimeMillis();
             synchronized(netModuleProcesses){
                 for(EmbeddedProcess process : netModuleProcesses.copy()){
                     if(!process.process.isAlive()){
                         netModuleProcesses.remove(process);
                         unregisterClient(process.client);
-                        dead.add(process.name);
+                        netModuleStartedAt.remove(process.name);
+                        queueNetModuleRetry(process.name);
+                    }else{
+                        Long startedAt = netModuleStartedAt.get(process.name);
+                        if(startedAt != null && now - startedAt >= netmodsRetryIntervalSeconds * 3000L
+                            && netModuleRetryAttempts.remove(process.name) != null){
+                            Log.info("[NetGateway] 核心网络模块已稳定运行，重试计数已清零: @", process.name);
+                        }
                     }
                 }
             }
-            for(String id : dead){
+
+            for(String id : new java.util.ArrayList<>(netModulesPendingRetry)){
                 NetModuleDefinition definition = netModules.find(d -> d.id.equals(id));
-                if(definition != null && definition.enabled){
-                    Log.warn("[NetGateway] 核心网络模块已退出，尝试重启: @", id);
-                    startNetModuleWithBuild(definition, true);
+                if(definition == null || !definition.enabled){
+                    netModulesPendingRetry.remove(id);
+                    netModuleRetryAttempts.remove(id);
+                    continue;
+                }
+                int attempt = netModuleRetryAttempts.merge(id, 1, Integer::sum);
+                if(attempt > netmodsMaxRestartAttempts){
+                    exhaustNetModuleRetries(id);
+                    return;
+                }
+                Log.warn("[NetGateway] 核心网络模块 @ 启动失败，第 @/@ 次重试（间隔 @ 秒）。",
+                    id, attempt, netmodsMaxRestartAttempts, netmodsRetryIntervalSeconds);
+                boolean started = startNetModuleWithBuild(definition, true);
+                if(started){
+                    netModulesPendingRetry.remove(id);
+                }else if(attempt >= netmodsMaxRestartAttempts){
+                    exhaustNetModuleRetries(id);
+                    return;
                 }
             }
-        }, 10f, 10f);
+        }, netmodsRetryIntervalSeconds, netmodsRetryIntervalSeconds);
+    }
+
+    private void queueNetModuleRetry(String moduleId){
+        if(!YZFText.blank(moduleId) && !netmodsVanillaFallback.get()) netModulesPendingRetry.add(moduleId);
+    }
+
+    private void resetNetModuleFallback(){
+        netmodsVanillaFallback.set(false);
+        netModulesPendingRetry.clear();
+        netModuleRetryAttempts.clear();
+        netModuleStartedAt.clear();
+    }
+
+    private void activateVanillaFallback(String failedModuleId){
+        if(!netmodsFallbackToVanilla || !netmodsVanillaFallback.compareAndSet(false, true)) return;
+        netModulesPendingRetry.clear();
+        fullControl = false;
+        splitMode = "off";
+        pendingChunks.clear();
+        synchronized(dropFilters){
+            dropFilters.clear();
+        }
+        rateBuckets.clear();
+        trafficPolicyEnabled = false;
+        Core.app.post(this::applyTrafficPolicies);
+
+        Seq<String> runningIds = new Seq<>();
+        synchronized(netModuleProcesses){
+            for(EmbeddedProcess process : netModuleProcesses.copy()) runningIds.add(process.name);
+        }
+        for(String id : runningIds) stopNetModuleProcess(id);
+        Log.err("[NetGateway] 核心网络模块 @ 连续重试 @ 次仍失败，已停止全部核心网络模块并切换至 Mindustry 原版默认网络行为。修复依赖后执行 yzf net rescan 或 yzf net restart all 可重新尝试。",
+            failedModuleId, netmodsMaxRestartAttempts);
+    }
+
+    private void exhaustNetModuleRetries(String failedModuleId){
+        if(netmodsFallbackToVanilla){
+            activateVanillaFallback(failedModuleId);
+        }else{
+            netModulesPendingRetry.remove(failedModuleId);
+            Log.err("[NetGateway] 核心网络模块 @ 连续重试 @ 次仍失败，已停止重试；fallbackToVanilla=false，其他模块继续运行。",
+                failedModuleId, netmodsMaxRestartAttempts);
+        }
     }
 
     private void spawnNetModule(NetModuleDefinition definition){
-        File commandFile = new File(definition.command);
-        if(!commandFile.isAbsolute()){
-            commandFile = new File(definition.dir.file(), definition.command);
+        File commandFile = resolveCommandFile(definition);
+        if(!isUsableCommand(definition)){
+            Log.err("[NetGateway] 拒绝启动核心网络模块 @：可执行文件缺失或不适用于当前系统: @", definition.id, commandFile.getAbsolutePath());
+            return;
         }
+        if(!isWindows()) commandFile.setExecutable(true);
         Process process;
         EmbeddedProcess embedded;
         // Check-and-start under the process lock so concurrent callers (initial manager
@@ -688,6 +859,7 @@ public final class YZFNetGateway{
             netModuleBinaryFingerprints.put(definition.id, binaryFingerprint(commandFile));
             netModuleBuildFingerprints.put(definition.id, buildFingerprint(definition));
             netModuleMetaFingerprints.put(definition.id, metaFingerprint(definition));
+            netModuleStartedAt.put(definition.id, System.currentTimeMillis());
             embedded = new EmbeddedProcess(definition.id, process);
             embedded.client = new GatewayClient("netmod:" + definition.id, null);
             embedded.client.output = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
@@ -761,6 +933,7 @@ public final class YZFNetGateway{
     /** Hot-add: rescan the netmods folder and spawn newly added modules without restart. */
     public synchronized String rescanNetModules(){
         if(!running.get()) return "网关未运行，无法热添加模块。";
+        resetNetModuleFallback();
         Seq<String> runningIds = new Seq<>();
         synchronized(netModuleProcesses){
             for(EmbeddedProcess process : netModuleProcesses) runningIds.add(process.name);
@@ -770,8 +943,11 @@ public final class YZFNetGateway{
         for(NetModuleDefinition definition : netModules){
             if(!definition.enabled) continue;
             if(runningIds.contains(definition.id)) continue;
-            startNetModuleWithBuild(definition, true);
-            added.add(definition.id);
+            if(startNetModuleWithBuild(definition, true)){
+                added.add(definition.id);
+            }else{
+                queueNetModuleRetry(definition.id);
+            }
         }
         return added.isEmpty() ? "重扫完成，未发现新模块。" : "已热添加模块: " + String.join(", ", added.toArray(String.class));
     }
@@ -780,10 +956,11 @@ public final class YZFNetGateway{
     public synchronized String restartNetModule(String moduleId){
         if(!running.get()) return "网关未运行。";
         if(YZFText.blank(moduleId)) return "用法: yzf net restart <moduleId|all>";
+        resetNetModuleFallback();
         Seq<String> targets = new Seq<>();
         if(moduleId.equalsIgnoreCase("all")){
-            synchronized(netModuleProcesses){
-                for(EmbeddedProcess process : netModuleProcesses) targets.add(process.name);
+            for(NetModuleDefinition definition : netModules){
+                if(definition.enabled) targets.add(definition.id);
             }
         }else{
             targets.add(moduleId);
@@ -795,14 +972,15 @@ public final class YZFNetGateway{
             NetModuleDefinition definition = netModules.find(d -> d.id.equals(id));
             if(definition != null && definition.enabled){
                 // Force a rebuild so `yzf net restart` picks up source edits too.
-                if(hasBuildConfig(definition)){
+                if(hotCompileEnabled(definition)){
                     compileNetModule(definition);
                 }
-                if(resolveCommandFile(definition).exists()){
+                if(isUsableCommand(definition)){
                     spawnNetModule(definition);
                     restarted.add(id);
                 }else{
                     Log.err("[NetGateway] 模块 @ 没有可用二进制，重启失败。", id);
+                    queueNetModuleRetry(id);
                 }
             }
         }
@@ -900,6 +1078,8 @@ public final class YZFNetGateway{
                 item.put("enabled", definition.enabled);
                 item.put("running", runningNow);
                 item.put("hasBuild", hasBuildConfig(definition));
+                item.put("hotCompile", hotCompileEnabled(definition));
+                item.put("retryAttempts", netModuleRetryAttempts.getOrDefault(definition.id, 0));
                 item.put("statsLog", !isNetModuleLogMuted(definition.id));
                 Fi statusFile = definition.dir.child(NETMOD_STATUS_FILE);
                 boolean fresh = statusFile.exists() && now - statusFile.lastModified() <= NETMOD_STATUS_STALE_MS;
@@ -932,6 +1112,11 @@ public final class YZFNetGateway{
         root.put("ok", true);
         root.put("running", running.get());
         root.put("dir", paths.root.child(netmodsDirName).absolutePath());
+        root.put("hotReload", netmodsHotReload);
+        root.put("hotCompile", netmodsHotCompile);
+        root.put("vanillaFallback", netmodsVanillaFallback.get());
+        root.put("maxRestartAttempts", netmodsMaxRestartAttempts);
+        root.put("retryIntervalSeconds", netmodsRetryIntervalSeconds);
         root.put("modules", modules);
         return root.toString(Jval.Jformat.plain);
     }
@@ -951,8 +1136,10 @@ public final class YZFNetGateway{
         }
         definition.enabled = enable;
         if(enable){
-            startNetModuleWithBuild(definition, true);
-            return "已启用并启动核心网络模块: " + moduleId;
+            resetNetModuleFallback();
+            boolean started = startNetModuleWithBuild(definition, true);
+            if(!started) queueNetModuleRetry(definition.id);
+            return started ? "已启用并启动核心网络模块: " + moduleId : "已启用核心网络模块，但启动失败，已进入限次重试。";
         }else{
             boolean stopped = stopNetModuleProcess(definition.id);
             return "已禁用核心网络模块: " + moduleId + (stopped ? "（进程已停止）" : "（未运行）");
@@ -981,6 +1168,17 @@ public final class YZFNetGateway{
         return !YZFText.blank(definition.buildType) || !YZFText.blank(definition.buildScript);
     }
 
+    private boolean hotCompileEnabled(NetModuleDefinition definition){
+        if(!netmodsHotCompile || !hasBuildConfig(definition)) return false;
+        String type = definition.buildType == null ? "" : definition.buildType.trim().toLowerCase(Locale.ROOT);
+        return switch(type){
+            case "c" -> netmodsCompileC;
+            case "cpp", "cxx", "cc" -> netmodsCompileCpp;
+            case "go" -> netmodsCompileGo;
+            default -> true;
+        };
+    }
+
     /**
      * Applies netmods folder changes detected by the file watcher. Runs on the watcher's
      * worker thread, never on the game thread, so compiling and restarting modules
@@ -994,7 +1192,7 @@ public final class YZFNetGateway{
      * - binary replaced externally                -> restart
      */
     public void onNetModFilesChanged(){
-        if(!running.get()) return;
+        if(!running.get() || netmodsVanillaFallback.get()) return;
 
         Seq<String> toStop = new Seq<>();
         Seq<NetModuleDefinition> toBuild = new Seq<>();
@@ -1021,7 +1219,7 @@ public final class YZFNetGateway{
                 // second concurrent compile of the same module.
                 if(netModulesCompiling.contains(definition.id)) continue;
                 EmbeddedProcess current = runningNow.get(definition.id);
-                boolean buildable = hasBuildConfig(definition);
+                boolean buildable = hotCompileEnabled(definition);
                 if(current == null){
                     if(definition.enabled){
                         if(buildable) toBuild.add(definition);
@@ -1073,29 +1271,36 @@ public final class YZFNetGateway{
         for(NetModuleDefinition definition : toBuild){
             boolean wasRunning = stopNetModuleProcess(definition.id);
             boolean built = compileNetModule(definition);
-            File commandFile = resolveCommandFile(definition);
-            if(built && commandFile.exists()){
+            if(built && isUsableCommand(definition)){
                 netModuleBuildFingerprints.put(definition.id, buildFingerprint(definition));
                 netModuleMetaFingerprints.put(definition.id, metaFingerprint(definition));
                 spawnNetModule(definition);
                 Log.info("[NetGateway] 热编译完成并已重启核心网络模块: @", definition.id);
-            }else if(wasRunning && commandFile.exists()){
+            }else if(wasRunning && isUsableCommand(definition)){
                 spawnNetModule(definition);
                 Log.warn("[NetGateway] 热编译失败，已用旧版本重启核心网络模块: @", definition.id);
             }else{
                 Log.err("[NetGateway] 热编译失败且无可用二进制，核心网络模块保持停止: @", definition.id);
+                queueNetModuleRetry(definition.id);
             }
         }
 
         for(NetModuleDefinition definition : toRestart){
             stopNetModuleProcess(definition.id);
             spawnNetModule(definition);
-            Log.info("[NetGateway] 热重启核心网络模块（检测到二进制/配置变更）: @", definition.id);
+            if(isNetModuleRunning(definition.id)){
+                Log.info("[NetGateway] 热重启核心网络模块（检测到二进制/配置变更）: @", definition.id);
+            }else{
+                queueNetModuleRetry(definition.id);
+            }
         }
 
         for(NetModuleDefinition definition : toStart){
-            spawnNetModule(definition);
-            Log.info("[NetGateway] 热添加核心网络模块: @", definition.id);
+            if(startNetModuleWithBuild(definition, true)){
+                Log.info("[NetGateway] 热添加核心网络模块: @", definition.id);
+            }else{
+                queueNetModuleRetry(definition.id);
+            }
         }
     }
 
@@ -1107,14 +1312,138 @@ public final class YZFNetGateway{
         return commandFile;
     }
 
+    private static boolean isWindows(){
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
+    }
+
+    private static boolean isLinux(){
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux");
+    }
+
+    private static boolean isMac(){
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        return os.contains("mac") || os.contains("darwin");
+    }
+
+    /** Resolve a configured tool first, then an environment override, then PATH. */
+    private static String configuredOrEnvironment(String configured, String... environmentNames){
+        if(!YZFText.blank(configured)) return configured.trim();
+        for(String name : environmentNames){
+            String value = System.getenv(name);
+            if(!YZFText.blank(value)) return value.trim();
+        }
+        return "";
+    }
+
+    private String resolveGoCompiler(){
+        String value = configuredOrEnvironment(netmodsGoCompiler, "YZF_GO", "GO");
+        return YZFText.blank(value) ? "go" : value;
+    }
+
+    private String resolveCCompiler(){
+        String value = configuredOrEnvironment(netmodsCCompiler, "YZF_CC", "CC");
+        return YZFText.blank(value) ? (isMac() ? "clang" : "gcc") : value;
+    }
+
+    private String resolveCppCompiler(){
+        String value = configuredOrEnvironment(netmodsCppCompiler, "YZF_CXX", "CXX");
+        return YZFText.blank(value) ? (isMac() ? "clang++" : "g++") : value;
+    }
+
+    private void logNetmodEnvironmentCheck(){
+        boolean needsGo = false, needsC = false, needsCpp = false;
+        for(NetModuleDefinition definition : netModules){
+            if(!definition.enabled || !hotCompileEnabled(definition)) continue;
+            // An existing compatible executable is all the runtime needs at
+            // startup.  Do not warn about absent Go/MSVC for prebuilt modules.
+            if(netmodsPrecompiledFirst && isUsableCommand(definition)) continue;
+            String type = definition.buildType == null ? "" : definition.buildType.trim().toLowerCase(Locale.ROOT);
+            if(type.equals("go")) needsGo = true;
+            else if(type.equals("c")) needsC = true;
+            else if(type.equals("cpp") || type.equals("cxx") || type.equals("cc")) needsCpp = true;
+        }
+
+        String os = System.getProperty("os.name", "unknown");
+        String arch = System.getProperty("os.arch", "unknown");
+        Log.info("[NetGateway] 启动环境检查: os=@ arch=@ runtime=@ 热编译=@ C=@ C++=@ Go=@",
+            os, arch, NETMOD_RUNTIME_REVISION, netmodsHotCompile,
+            netmodsCompileC, netmodsCompileCpp, netmodsCompileGo);
+
+        Seq<String> missing = new Seq<>();
+        if(needsGo && !toolAvailable(resolveGoCompiler())) missing.add(resolveGoCompiler());
+        if(isWindows()){
+            if((needsC || needsCpp) && findVcVars64() == null) missing.add("MSVC/Visual Studio Build Tools");
+        }else{
+            String cc = resolveCCompiler();
+            String cxx = resolveCppCompiler();
+            if(needsC && !toolAvailable(cc)) missing.add(cc);
+            if(needsCpp && !toolAvailable(cxx)) missing.add(cxx);
+        }
+        if(missing.isEmpty()){
+            Log.info("[NetGateway] 热编译依赖检查通过。");
+        }else{
+            Log.warn("[NetGateway] 热编译缺少系统依赖: @。Windows 需安装 Go/MSVC；Debian/Ubuntu 可安装 build-essential golang-go；Alpine 可安装 build-base go。缺少依赖的模块将限次重试后回退原版网络。",
+                String.join(", ", missing.toArray(String.class)));
+        }
+    }
+
+    private static boolean toolAvailable(String command){
+        if(YZFText.blank(command)) return false;
+        Process process = null;
+        try{
+            ProcessBuilder builder = new ProcessBuilder(command, "--version");
+            builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            builder.redirectError(ProcessBuilder.Redirect.DISCARD);
+            process = builder.start();
+            if(!process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)){
+                process.destroyForcibly();
+                return false;
+            }
+            return process.exitValue() == 0;
+        }catch(Throwable ignored){
+            return false;
+        }finally{
+            if(process != null && process.isAlive()) process.destroyForcibly();
+        }
+    }
+
+    private static boolean isNativeBuild(NetModuleDefinition definition){
+        String type = definition.buildType == null ? "" : definition.buildType.trim().toLowerCase(Locale.ROOT);
+        return type.equals("go") || type.equals("c") || type.equals("cpp") || type.equals("cxx") || type.equals("cc");
+    }
+
+    private static boolean isUsableCommand(NetModuleDefinition definition){
+        File command = resolveCommandFile(definition);
+        return command.exists() && command.isFile()
+            && (!isNativeBuild(definition) || isBinaryCompatibleWithCurrentOs(command));
+    }
+
+    /** Prevents a Windows PE binary from being launched in Linux (and vice versa). */
+    private static boolean isBinaryCompatibleWithCurrentOs(File file){
+        if(file == null || !file.isFile()) return false;
+        if(!isWindows() && !isLinux() && !isMac()) return true;
+        try(FileInputStream input = new FileInputStream(file)){
+            int b0 = input.read(), b1 = input.read(), b2 = input.read(), b3 = input.read();
+            if(b3 < 0) return false;
+            if(isWindows()) return b0 == 'M' && b1 == 'Z';
+            if(isLinux()) return b0 == 0x7f && b1 == 'E' && b2 == 'L' && b3 == 'F';
+            return (b0 == 0xfe && b1 == 0xed && b2 == 0xfa && (b3 == 0xce || b3 == 0xcf))
+                || ((b0 == 0xce || b0 == 0xcf) && b1 == 0xfa && b2 == 0xed && b3 == 0xfe)
+                || (b0 == 0xca && b1 == 0xfe && b2 == 0xba && b3 == 0xbe)
+                || (b0 == 0xbe && b1 == 0xba && b2 == 0xfe && b3 == 0xca);
+        }catch(IOException ignored){
+            return false;
+        }
+    }
+
     /**
      * Hot-compiles a core network module from source. Returns true when a usable binary
      * exists at the module's command path afterwards.
      *
      * Build strategy (first match wins):
      * 1. build.script configured (e.g. "build.bat") -> run it in the module folder.
-     * 2. build.type "go"   -> go build -o <output> .
-     *    build.type "cpp"  -> MSVC cl.exe (vcvars64 auto-discovered) /std:c++17 /O2.
+     * 2. build.type "go"       -> go build -o <output> .
+     *    build.type "c|cpp"    -> MSVC on Windows, gcc/g++ on Linux, clang/clang++ on macOS.
      * 3. build.bat / build.sh present in the module folder -> run it.
      */
     private boolean compileNetModule(NetModuleDefinition definition){
@@ -1133,6 +1462,10 @@ public final class YZFNetGateway{
     }
 
     private boolean compileNetModuleLocked(NetModuleDefinition definition){
+        if(!hotCompileEnabled(definition)){
+            Log.warn("[NetGateway] 模块 @ 的热编译已被 netmods.hotCompile 开关禁用。", definition.id);
+            return false;
+        }
         File dir = definition.dir.file();
         long startMs = System.currentTimeMillis();
         String type = definition.buildType;
@@ -1145,16 +1478,19 @@ public final class YZFNetGateway{
                 Log.err("[NetGateway] 模块 @ 的 build.script 不存在: @", definition.id, script.getAbsolutePath());
                 return false;
             }
-            ok = runBuildCommand(definition, dir, scriptCommandLine(script));
+            ok = runBuildScript(definition, dir, script);
         }else if("go".equalsIgnoreCase(type)){
             ok = buildGoModule(definition, dir);
-        }else if("cpp".equalsIgnoreCase(type) || "c".equalsIgnoreCase(type) || "cxx".equalsIgnoreCase(type)){
-            ok = buildCppModule(definition, dir);
+        }else if("cpp".equalsIgnoreCase(type) || "c".equalsIgnoreCase(type)
+            || "cxx".equalsIgnoreCase(type) || "cc".equalsIgnoreCase(type)){
+            ok = buildCOrCppModule(definition, dir);
         }else{
             File bat = new File(dir, "build.bat");
             File sh = new File(dir, "build.sh");
-            if(bat.exists()) ok = runBuildCommand(definition, dir, scriptCommandLine(bat));
-            else if(sh.exists()) ok = runBuildCommand(definition, dir, scriptCommandLine(sh));
+            if(isWindows() && bat.exists()) ok = runBuildScript(definition, dir, bat);
+            else if(!isWindows() && sh.exists()) ok = runBuildScript(definition, dir, sh);
+            else if(bat.exists()) ok = runBuildScript(definition, dir, bat);
+            else if(sh.exists()) ok = runBuildScript(definition, dir, sh);
             else{
                 Log.warn("[NetGateway] 模块 @ 没有可用的 build 配置或 build 脚本，跳过热编译。", definition.id);
                 return false;
@@ -1167,15 +1503,22 @@ public final class YZFNetGateway{
             return false;
         }
         if(ok){
+            if(!isWindows()) output.setExecutable(true);
             Log.info("[NetGateway] 模块 @ 热编译成功，耗时 @ ms。", definition.id, System.currentTimeMillis() - startMs);
         }
         return ok;
     }
 
     private boolean buildGoModule(NetModuleDefinition definition, File dir){
+        String go = resolveGoCompiler();
+        if(!toolAvailable(go)){
+            Log.err("[NetGateway] Go 模块 @ 无法热编译：找不到 @。请在 netgateway.hjson 的 netmods.toolchain.go 中指定 go.exe，或加入 PATH。", definition.id, go);
+            return false;
+        }
         File output = resolveCommandFile(definition);
+        ensureOutputDirectory(output);
         Seq<String> cmd = new Seq<>();
-        cmd.add("go");
+        cmd.add(go);
         cmd.add("build");
         cmd.add("-o");
         cmd.add(output.getAbsolutePath());
@@ -1192,30 +1535,64 @@ public final class YZFNetGateway{
         return runBuildCommand(definition, dir, cmd.toArray(String.class));
     }
 
-    private boolean buildCppModule(NetModuleDefinition definition, File dir){
-        File vcvars = findVcVars64();
-        if(vcvars == null){
-            Log.err("[NetGateway] 未找到 MSVC vcvars64.bat，无法热编译 C++ 模块 @。请安装 Visual Studio Build Tools，或在 netmodule.hjson 中配置 build.script 使用自己的编译器。", definition.id);
-            return false;
-        }
+    private boolean buildCOrCppModule(NetModuleDefinition definition, File dir){
+        boolean cSource = "c".equalsIgnoreCase(definition.buildType);
         if(YZFText.blank(definition.buildSource)){
-            Log.err("[NetGateway] C++ 模块 @ 缺少 build.source（如 \"src/main.cpp\"）。", definition.id);
+            Log.err("[NetGateway] @ 模块 @ 缺少 build.source（如 @）。",
+                cSource ? "C" : "C++", definition.id, cSource ? "\"src/main.c\"" : "\"src/main.cpp\"");
             return false;
         }
         File output = resolveCommandFile(definition);
-        String line = "call \"" + vcvars.getAbsolutePath() + "\" >nul 2>nul"
-            + " && cl.exe /nologo /std:c++17 /O2 /EHsc /W3 /utf-8"
-            + " \"" + definition.buildSource.replace('/', File.separatorChar) + "\""
-            + " /Fe:\"" + output.getName() + "\"";
-        return runBuildCommand(definition, dir, new String[]{"cmd", "/c", line});
+        ensureOutputDirectory(output);
+        File source = new File(dir, definition.buildSource.replace('/', File.separatorChar));
+        if(!source.isFile()){
+            Log.err("[NetGateway] 模块 @ 的 build.source 不存在: @", definition.id, source.getAbsolutePath());
+            return false;
+        }
+        if(isWindows()){
+            File vcvars = findVcVars64();
+            if(vcvars == null){
+                Log.err("[NetGateway] 未找到 MSVC vcvars64.bat，无法热编译 @ 模块 @。请安装 Visual Studio Build Tools，或配置 build.script。",
+                    cSource ? "C" : "C++", definition.id);
+                return false;
+            }
+            String languageArgs = cSource ? " /TC /std:c11" : " /TP /std:c++17 /EHsc";
+            String line = "call \"" + vcvars.getAbsolutePath() + "\" >nul 2>nul"
+                + " && cl.exe /nologo /O2 /W3 /utf-8" + languageArgs
+                + " \"" + source.getAbsolutePath() + "\""
+                + " /Fe:\"" + output.getAbsolutePath() + "\"";
+            return runBuildCommand(definition, dir, new String[]{"cmd", "/c", line});
+        }
+
+        String compiler = cSource ? resolveCCompiler() : resolveCppCompiler();
+        if(!toolAvailable(compiler)){
+            Log.err("[NetGateway] @ 模块 @ 无法热编译：当前系统 PATH 中找不到 @。Debian/Ubuntu 安装 build-essential，Alpine 安装 build-base。",
+                cSource ? "C" : "C++", definition.id, compiler);
+            return false;
+        }
+        return runBuildCommand(definition, dir, new String[]{
+            compiler,
+            cSource ? "-std=c11" : "-std=c++17",
+            "-O2", "-Wall", "-Wextra",
+            source.getAbsolutePath(), "-o", output.getAbsolutePath()
+        });
     }
 
-    private static String[] scriptCommandLine(File script){
+    private static void ensureOutputDirectory(File output){
+        File parent = output.getParentFile();
+        if(parent != null && !parent.exists()) parent.mkdirs();
+    }
+
+    private boolean runBuildScript(NetModuleDefinition definition, File dir, File script){
         String name = script.getName().toLowerCase(Locale.ROOT);
         if(name.endsWith(".bat") || name.endsWith(".cmd")){
-            return new String[]{"cmd", "/c", script.getAbsolutePath()};
+            if(!isWindows()){
+                Log.err("[NetGateway] 模块 @ 的 Windows 构建脚本不能在当前系统运行: @", definition.id, script.getAbsolutePath());
+                return false;
+            }
+            return runBuildCommand(definition, dir, new String[]{"cmd", "/c", script.getAbsolutePath()});
         }
-        return new String[]{"bash", script.getAbsolutePath()};
+        return runBuildCommand(definition, dir, new String[]{"bash", script.getAbsolutePath()});
     }
 
     /** Runs a build command in the module folder, capturing combined output. 300s timeout. */
@@ -1264,8 +1641,8 @@ public final class YZFNetGateway{
     }
 
     /** Locates vcvars64.bat under common Visual Studio installations. */
-    private static File findVcVars64(){
-        String cached = System.getProperty("yzf.vcvars64", "");
+    private File findVcVars64(){
+        String cached = !YZFText.blank(netmodsVcvars64) ? netmodsVcvars64 : System.getProperty("yzf.vcvars64", "");
         if(!YZFText.blank(cached)){
             File file = new File(cached);
             if(file.exists()) return file;

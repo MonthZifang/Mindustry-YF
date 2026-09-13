@@ -253,13 +253,13 @@ config/yzf/netmods/
 | --- | --- |
 | 使用现成二进制 | 无额外依赖，放入即可 |
 | Go 热编译（`build.type: "go"`） | 系统 PATH 里有 `go`（`go version` 可运行） |
-| C++ 热编译（`build.type: "cpp"`） | 已安装 Visual Studio Build Tools（网关自动搜索 `vcvars64.bat`），或配置 `build.script` 用自己的编译器 |
+| C/C++ 热编译（`build.type: "c"/"cpp"`） | Windows 安装 Visual Studio Build Tools；Linux 安装 `gcc/g++`；macOS 安装 `clang/clang++` |
 | 自定义构建（`build.script`） | 脚本自身依赖（如 cmake、mingw） |
 
 ### 3.2 部署步骤（源码即部署）
 
 1. 把模块文件夹复制到 `config/yzf/netmods/` 下（只需源码 + `netmodule.hjson`）。
-2. 确认 `config/yzf/config/netgateway.hjson` 中 `enabled: true`、`netmods.hotReload: true`。
+2. 确认 `config/yzf/config/netgateway.hjson` 中 `enabled: true`、`netmods.hotReload: true`、`netmods.hotCompile.enabled: true`。
 3. 启动服务端（或运行中执行 `yzf net rescan`）。
 4. 网关发现缺少二进制 → 自动热编译 → 启动模块。
 
@@ -302,8 +302,8 @@ config/yzf/netmods/
 | `enabled` | bool | 否 | `true` | `false` 时扫描到也不启动；运行中改为 false 会被热停止 |
 | `command` | string | **是** | 无 | 可执行文件路径；相对路径相对**模块文件夹**解析，也可绝对路径。缺失则整个模块被跳过并告警 |
 | `args` | string[] | 否 | `[]` | 追加给可执行文件的命令行参数 |
-| `build.type` | string | 否 | 无 | 热编译类型：`go` / `cpp` / `c` / `cxx`；留空则回落到模块目录内的 `build.bat`/`build.sh` |
-| `build.source` | string | cpp 必填 | 无 | C/C++ 主源文件相对路径，如 `"src/main.cpp"` |
+| `build.type` | string | 否 | 无 | 热编译类型：`go` / `c` / `cpp` / `cxx` / `cc`；留空则回落到模块目录内的 `build.bat`/`build.sh` |
+| `build.source` | string | C/C++ 必填 | 无 | C/C++ 主源文件相对路径，如 `"src/main.c"` 或 `"src/main.cpp"` |
 | `build.script` | string | 否 | 无 | 自定义构建脚本（如 `"build.bat"`）；**配置后优先于内置编译器** |
 
 **默认内容示例（Go 热编译）：**
@@ -346,6 +346,8 @@ config/yzf/netmods/
 # netmods: 核心网络模块相关开关。
 #   dir: 核心网络模块目录（默认 netmods）；autoRestart: 崩溃后是否自动重启。
 #   hotReload: 是否自动监听目录变化并热加载（重新编译/新增/删除模块后自动生效，无需重启服务端）。
+#   hotCompile: C/C++/Go 源码热编译总开关及分语言开关。
+#   retry: 启动失败后限次重试，耗尽后回退 Mindustry 原版网络行为。
 # splitPolicy: 大包拆分策略。
 #   mode: off=关闭 internal=网关内部定时分片 external=委托外部模块拆分。
 #   threshold: 超过该字符长度的消息包会被拆分。
@@ -358,7 +360,13 @@ enabled: true
 http: { enabled: true, address: "localhost", port: 7100 }
 tcp: { enabled: true, address: "localhost", port: 7101 }
 processes: []
-netmods: { dir: "netmods", autoRestart: true, hotReload: true }
+netmods: {
+  dir: "netmods"
+  autoRestart: true
+  hotReload: true
+  hotCompile: { enabled: true, c: true, cpp: true, go: true }
+  retry: { maxAttempts: 3, intervalSeconds: 10, fallbackToVanilla: true }
+}
 splitPolicy: { mode: "internal", threshold: 200, chunkSize: 100, intervalMs: 60, chunksPerTick: 4 }
 token: ""
 observe: { sendPackets: false, receivePackets: true, chat: true, joins: true }
@@ -378,6 +386,10 @@ observe: { sendPackets: false, receivePackets: true, chat: true, joins: true }
 - `netmods.dir` (string, 默认 `"netmods"`)：核心网络模块目录名（相对 yzf 根目录）。
 - `netmods.autoRestart` (bool, 默认 true)：模块进程意外退出后，网关每 10 秒巡检一次并自动重启。
 - `netmods.hotReload` (bool, 默认 true)：是否启动文件监听器做热编译/热重启，见 [第 10 章](#10-热编译与热重载)。
+- `netmods.hotCompile` (bool 或 object, 默认启用)：设为 `false` 可整体关闭源码编译；对象形式的 `enabled` 是总开关，`c`、`cpp`、`go` 可分别控制对应内置编译器。关闭热编译不影响二进制/配置文件的热重启。
+- `netmods.retry.maxAttempts` (int, 默认 3，范围 0~10)：模块启动、热编译或进程运行失败后的最大重试次数；0 表示直接进入回退。
+- `netmods.retry.intervalSeconds` (int, 默认 10，范围 1~300)：相邻重试的秒数。
+- `netmods.retry.fallbackToVanilla` (bool, 默认 true)：重试耗尽后停止全部核心网络模块，关闭 fullControl，并清空外部过滤、限速、拆包和流量整形状态，恢复 Mindustry 原版网络行为。
 - `splitPolicy.mode` (string, 默认 `"internal"`)：`off`=关闭拆分；`internal`=网关内部定时分片；`external`=取消原包并向订阅方广播 `SplitRequest`，等待模块回传 `split.send`。
 - `splitPolicy.threshold` (int, 默认 200)：消息**字符数**超过该值触发拆分。解析时强制 `max(16, 值)`。
 - `splitPolicy.chunkSize` (int, 默认 100)：每片最大字符数。强制 `max(16, 值)`。
@@ -1007,37 +1019,47 @@ curl -s -X POST http://localhost:7100/yzfnet/netmods/stop \
 
 ### 10.3 热编译策略（第一个匹配生效）
 
-1. **`build.script` 已配置** → 在模块目录执行该脚本（`.bat/.cmd` 用 `cmd /c`，其余用 `bash`）。
+1. **`build.script` 已配置** → 在模块目录执行该脚本（Windows 的 `.bat/.cmd` 用 `cmd /c`，其余用 `bash`；非 Windows 不执行批处理文件）。
 2. **`build.type: "go"`** → `go build -o <command绝对路径> .`（有 `go.mod` 时）；否则编译目录下全部 `.go` 文件。
-3. **`build.type: "cpp"|"c"|"cxx"`** → 自动定位 MSVC `vcvars64.bat`（先查 JVM 属性 `yzf.vcvars64` 缓存，再扫 `Microsoft Visual Studio/<年>/<版>/VC/Auxiliary/Build/vcvars64.bat`），执行：
+3. **`build.type: "c"`** → Windows 自动定位 MSVC 并以 C11 编译；Linux 使用 `gcc -std=c11`，macOS 使用 `clang -std=c11`。环境变量 `CC` 可覆盖编译器命令。
+4. **`build.type: "cpp"|"cxx"|"cc"`** → Windows 自动定位 MSVC 并以 C++17 编译；Linux 使用 `g++ -std=c++17`，macOS 使用 `clang++ -std=c++17`。环境变量 `CXX` 可覆盖编译器命令。
+
+   Windows 下会先查 JVM 属性 `yzf.vcvars64`，再扫描 `Microsoft Visual Studio/<年>/<版>/VC/Auxiliary/Build/vcvars64.bat`，执行类似：
 
    ```text
-   call "<vcvars64.bat>" >nul 2>nul && cl.exe /nologo /std:c++17 /O2 /EHsc /W3 /utf-8 "<build.source>" /Fe:"<command文件名>"
+   call "<vcvars64.bat>" >nul 2>nul && cl.exe /nologo /O2 /W3 /utf-8 /TP /std:c++17 /EHsc "<build.source>" /Fe:"<command绝对路径>"
    ```
 
-4. **回落**：模块目录内存在 `build.bat` 或 `build.sh` → 执行它。
-5. 都没有 → 日志 `没有可用的 build 配置或 build 脚本，跳过热编译`。
+5. **回落**：Windows 优先执行 `build.bat`，Linux/macOS 优先执行 `build.sh`。
+6. 都没有 → 日志 `没有可用的 build 配置或 build 脚本，跳过热编译`。
 
 编译约束：
 
 - 工作目录 = 模块文件夹；合并输出最多捕获 8000 字符；**超时 300 秒**强制终止。
 - 编译成功但 `command` 指向的文件仍不存在 → 视为失败（`编译命令成功但未生成目标文件`）。
+- 启动前检查原生二进制格式：Windows 要求 PE (`MZ`)，Linux 要求 ELF，macOS 要求 Mach-O。检测到错平台产物时自动为当前系统重编译；热编译关闭或失败时拒绝启动该文件。
+- Linux/macOS 编译成功后自动补可执行权限。
+- 网关启动时输出 OS、CPU 架构、热编译运行时版本，并主动检查当前模块需要的 `go`、`gcc/g++`、`clang/clang++` 或 MSVC。Linux 容器必须在镜像中安装这些系统工具；它们不随 Java JAR 分发。
 - **编译失败保留旧版本**：若旧二进制还在，用它重启模块并告警；否则模块保持停止并报错。
 - 并发保护：同一模块同时只允许一次编译（`netModulesCompiling` 集合）；初始部署编译进行中时，文件监听器的重复编译请求会被跳过。
 
 ### 10.4 崩溃自愈
 
-`netmods.autoRestart: true`（默认）时，网关每 **10 秒**巡检：已死亡的模块进程被清理并重新走"编译（如需）→ 启动"流程。日志 `核心网络模块已退出，尝试重启: <id>`。
+`netmods.autoRestart: true`（默认）时，网关按 `netmods.retry.intervalSeconds` 巡检启动失败或已经退出的模块，重新走“环境检查 → 编译（如需）→ 启动”流程。默认每 **10 秒**一次，最多 **3 次**。模块连续稳定运行三个重试周期后，其失败计数清零。
+
+重试耗尽且 `fallbackToVanilla: true` 时，网关停止全部核心网络模块、关闭 `fullControl` 并清空模块设置的过滤/限速/拆包规则，日志明确输出 `已停止全部核心网络模块并切换至 Mindustry 原版默认网络行为`。修复工具链后执行 `yzf net rescan`、`yzf net restart all` 或 `yzf net reload` 可退出回退状态并重新尝试。
 
 ### 10.5 首次部署
 
-有 build 配置但没有二进制时，启动流程自动先编译：
+有 build 配置但没有二进制，或现有二进制属于其他操作系统时，启动流程自动先编译：
 
 ```text
 [I] [NetGateway] 核心网络模块 packet-splitter 缺少二进制，先热编译源码...
 ```
 
 即"源码即部署"：只拷贝源码文件夹也能跑起来。
+
+> `core.hjson` 使用 `mode: source` 时，服务端通常保留 `config/yzf/core/src` 中的外置 Java 源码。为避免更新 JAR 后仍加载不支持跨平台热编译的旧网关，启动时会检查 `YZFNetGateway.java` 的运行时版本；版本过旧时仅刷新该文件，并在同目录保留 `YZFNetGateway.java.pre-native-hotcompile-v3.bak`，其他外置源码不受影响。
 
 ### 10.6 Windows exe 文件锁
 
@@ -1277,13 +1299,13 @@ netwatch 目录附带 `build.bat`：`go build` 到临时文件 → POST `/yzfnet
 
 ### 13.6 编译方式
 
-`netmodule.hjson` 配置 `build: { type: "cpp", source: "src/main.cpp" }`，网关用 MSVC 编译：
+`netmodule.hjson` 配置 `build: { type: "cpp", source: "src/main.cpp" }`。Windows 用 MSVC：
 
 ```text
 cl.exe /nologo /std:c++17 /O2 /EHsc /W3 /utf-8 "src\main.cpp" /Fe:"packet-splitter.exe"
 ```
 
-无 MSVC 时报错 `未找到 MSVC vcvars64.bat...请安装 Visual Studio Build Tools，或在 netmodule.hjson 中配置 build.script 使用自己的编译器`。中间产物 `main.obj` 等被指纹与监听器忽略，不会触发误重载。
+Linux 使用 `g++ -std=c++17 -O2 -Wall -Wextra`，macOS 使用 `clang++`；可通过 `CXX` 环境变量覆盖。Windows 无 MSVC 时报错 `未找到 MSVC vcvars64.bat...请安装 Visual Studio Build Tools，或配置 build.script`。中间产物 `main.obj` 等被指纹与监听器忽略，不会触发误重载。
 
 ---
 
@@ -1357,7 +1379,9 @@ HTTP/TCP 绑定非本机地址前，网关检查 `external-access.hjson` 策略�
 | 报错/现象 | 原因 | 解决办法 |
 | --- | --- | --- |
 | `未找到 MSVC vcvars64.bat，无法热编译 C++ 模块` | 没装 VS Build Tools | 安装 Build Tools（含 C++ 桌面开发负载），或配 `build.script` |
-| `C++ 模块 <id> 缺少 build.source` | cpp 类型没给主源文件 | 补 `build: { source: "src/main.cpp" }` |
+| `C/C++ 模块 <id> 缺少 build.source` | c/cpp 类型没给主源文件 | 补 `build: { source: "src/main.c" }` 或 `build: { source: "src/main.cpp" }` |
+| `二进制不适用于当前系统` | 在 Linux 部署了 Windows `.exe`，或反之 | 保留源码并开启 `netmods.hotCompile`，让服务端生成当前平台产物 |
+| `热编译缺少系统依赖: go/gcc/g++` | Linux 容器镜像未安装编译器；Windows 宿主已安装并不代表容器也有 | Debian/Ubuntu 安装 `build-essential golang-go`；Alpine 安装 `build-base go` |
 | `模块 <id> 目录下没有 go.mod 或 .go 源文件` | go 类型但目录空 | 补源码或改 command 指向现成二进制 |
 | `模块 <id> 编译超时(300s)，已强制终止` | 依赖下载慢/机器慢 | 预热 go module 缓存；或用 build.script 分离下载与编译 |
 | `编译命令成功但未生成目标文件` | 构建脚本输出路径与 `command` 不一致 | 让脚本产物落在 `command` 指向的路径 |
@@ -1464,7 +1488,7 @@ func main() {
   build: { type: "go" }
 }
 
-# 形态 C：C++ 热编译（MSVC）
+# 形态 C：C++ 热编译（Windows/Linux/macOS）
 {
   id: my-tool
   name: "我的工具"
@@ -1574,7 +1598,7 @@ A：splitPolicy 运行时值可被模块的 `splitPolicy` 动作覆盖；配置�
 A：依次检查：① `enabled` 是否 false；② `command` 路径是否存在（相对模块文件夹解析）；③ 有 build 配置时看编译日志是否失败；④ 手动运行该 exe 看是否立即退出（比如 stdin 读取写法错误）。
 
 **Q5：C++ 模块能在 Linux 服务器上用吗？**
-A：内置 cpp 热编译走 MSVC（vcvars64.bat + cl.exe），是 Windows 路径。Linux 上请配 `build.script` 指向自己的 g++/clang 构建脚本，产物为无扩展名可执行文件（监听器把无扩展名文件也视为二进制变更）。⚠️ 暂未从源码确认：仓库内没有 Linux 构建脚本示例。
+A：可以。Linux 的内置 cpp 热编译直接调用 `g++ -std=c++17`，C 热编译调用 `gcc -std=c11`；安装对应工具链并开启 `netmods.hotCompile` 即可。`command` 即使保留 `.exe` 后缀也没问题，网关按 ELF 文件头判断平台并补可执行权限。
 
 **Q6：限速会不会让玩家不同步？**
 A：限速只丢弃**发送方向**的快照/同步包，降低更新频率；Mindustry 客户端有位置纠正与快照补偿机制兜底。netwatch/packet-splitter 选取 25~30 pps 的限速值正是为了在带宽与同步质量间取平衡。若观察到明显回弹（rubberband），调高对应限速值或缩短整形窗口。
@@ -1597,7 +1621,7 @@ A：看 `yzf net status` 的 `队列满丢弃`——非 0 说明派发队列（1
 
 | 项目 | 缺失内容 | 建议确认方式 |
 | --- | --- | --- |
-| Linux/macOS C++ 热编译 | 内置 cpp 编译链为 MSVC 专用，无 Unix 示例脚本 | 在 Linux 服务端实测 `build.script` 流程 |
+| Linux/macOS C/C++ 热编译 | 内置命令已接入 gcc/g++/clang，但当前 Windows 开发机未做 Unix 实机运行验证 | 在 Linux/macOS 服务端做一次源码保存与进程热重启测试 |
 | packet-splitter 突发限速不解除 | 退出整形后 BlockSnapshot/Sync 限速持续存在，是否为有意设计 | 与框架维护者确认（月月岛科技） |
 | `topPackets` 采样窗口 | 与 NetStatsEvent 同为 1 秒节拍，但计数器清零时机依附 stats 任务 | 源码已确认 `getAndSet(0)` 于采样时执行，无额外风险 |
 | netwatch 阈值硬编码 | 常量不可配置（注释称"可改为从 config.hjson 读取"，尚未实现） | 后续版本可能增加配置文件支持 |

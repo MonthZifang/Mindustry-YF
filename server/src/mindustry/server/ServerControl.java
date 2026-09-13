@@ -73,12 +73,14 @@ public class ServerControl implements ApplicationListener{
 
     /** The last gamemode loaded on this server. */
     public Gamemode lastMode;
+    private volatile Map selectedNextMap;
 
     private Task lastTask;
     private Thread socketThread;
     private ServerSocket serverSocket;
     private final CopyOnWriteArrayList<Socket> socketClients = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<PrintWriter> socketOutputs = new CopyOnWriteArrayList<>();
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> terminalOutput = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final Semaphore socketClientSlots = new Semaphore(32);
     private static final int socketAuthenticationTimeoutMillis = 15_000;
     private static final int socketIdleTimeoutMillis = 300_000;
@@ -94,6 +96,9 @@ public class ServerControl implements ApplicationListener{
     private boolean simpleConsole;
     private Charset consoleCharset;
     private String configuredConsoleMode, configuredConsoleCharset;
+    private boolean configuredTerminalEnabled = true;
+    private boolean configuredFoundationSupport = true;
+    private boolean configuredFallbackOnDumbTerminal = true;
     private volatile boolean shuttingDown;
     private final ObjectMap<String, LocalizedCommandInfo> localizedCommandInfo = new ObjectMap<>();
     private int serverHelpPageSize = serverHelpPageSizeDefault;
@@ -133,6 +138,7 @@ public class ServerControl implements ApplicationListener{
 
         //set the next map to be played
         Map map = maps.getNextMap(lastMode, state.map);
+        selectedNextMap = map;
         if(map != null){
             Call.infoMessage((state.rules.pvp
                     ? "[accent]The " + event.winner.coloredName() + " team is victorious![]\n" : "[scarlet]Game over![]\n")
@@ -156,6 +162,11 @@ public class ServerControl implements ApplicationListener{
     public ServerControl(String[] args){
         setup(args);
         instance = this;
+    }
+
+    /** The map selected by the current game-over rotation, exposed for result UIs. */
+    public Map selectedNextMap(){
+        return selectedNextMap;
     }
 
     protected void setup(String[] args){
@@ -206,6 +217,8 @@ public class ServerControl implements ApplicationListener{
                     err("Error occurred logging to socket: @", e1.getClass().getSimpleName());
                 }
             }
+            terminalOutput.add(sanitizeTerminalText(formatColors(text + "&fr", false)));
+            while(terminalOutput.size() > 300) terminalOutput.poll();
         };
 
         formatter = (text, useColors, arg) -> {
@@ -342,11 +355,11 @@ public class ServerControl implements ApplicationListener{
                     if(Groups.player.isEmpty()){
                         autoPaused = true;
                         state.set(State.paused);
-                    }else if(autoPaused){
+                    }else if(autoPaused && !(state.rules.pvp && netServer.isWaitingForPlayers())){
                         autoPaused = false;
                         state.set(State.playing);
                     }
-                }else if(autoPaused && Vars.state.isPaused()){ //unpause when the config is disabled
+                }else if(autoPaused && Vars.state.isPaused() && !(state.rules.pvp && netServer.isWaitingForPlayers())){ //unpause when the config is disabled
                     state.set(State.playing);
                     autoPaused = false;
                 }
@@ -436,7 +449,7 @@ public class ServerControl implements ApplicationListener{
 
             // JLine accepts a non-interactive stream as a "dumb" terminal, but
             // that terminal does not reliably deliver commands under systemd/docker.
-            if("dumb".equalsIgnoreCase(terminal.getType())){
+            if("dumb".equalsIgnoreCase(terminal.getType()) && configuredFallbackOnDumbTerminal){
                 try{
                     terminal.close();
                 }catch(Exception ignored){
@@ -458,6 +471,11 @@ public class ServerControl implements ApplicationListener{
     private boolean shouldPreferSimpleConsole(){
         if(Boolean.getBoolean("mindustry.console.jline")) return false;
         if(Boolean.getBoolean("mindustry.console.simple")) return true;
+
+        // The enhanced terminal path requires both the YZF terminal feature and
+        // its foundation integration. Keep the basic line reader as the safe
+        // compatibility mode when either feature is disabled.
+        if(!configuredTerminalEnabled || !configuredFoundationSupport) return true;
 
         String mode = System.getProperty("mindustry.console.mode", "").trim().toLowerCase(Locale.ROOT);
         if(mode.equals("jline")) return false;
@@ -499,10 +517,16 @@ public class ServerControl implements ApplicationListener{
     private void loadConsoleConfiguration(){
         configuredConsoleMode = "";
         configuredConsoleCharset = "";
+        configuredTerminalEnabled = true;
+        configuredFoundationSupport = true;
+        configuredFallbackOnDumbTerminal = true;
         Fi file = Core.settings.getDataDirectory().child("yzf/config/terminal.hjson");
         if(!file.exists()) return;
         try{
             Jval root = Jval.read(YZFBridge.readTextSmart(file));
+            configuredTerminalEnabled = root.getBool("enabled", true);
+            configuredFoundationSupport = root.getBool("foundationSupport", true);
+            configuredFallbackOnDumbTerminal = root.getBool("fallbackOnDumbTerminal", true);
             configuredConsoleMode = root.getString("consoleMode", "").trim().toLowerCase(Locale.ROOT);
             configuredConsoleCharset = root.getString("charset", "").trim();
         }catch(Exception error){
@@ -724,7 +748,7 @@ public class ServerControl implements ApplicationListener{
                     return;
                 }
             }else{
-                result = maps.getShuffleMode().next(preset, state.map);
+                result = maps.getNextMap(preset, state.map);
                 if(result != null){
                     info("Randomized next map to be @.", result.plainName());
                 }
@@ -739,6 +763,7 @@ public class ServerControl implements ApplicationListener{
                 try{
                     world.loadMap(result, result.applyRules(lastMode));
                     state.rules = result.applyRules(preset);
+                    Events.fire(new RulesLoadEvent(state.rules));
                     logic.play();
 
                     info("Map loaded.");
@@ -1543,6 +1568,37 @@ public class ServerControl implements ApplicationListener{
         }
     }
 
+    /** Snapshot of recent output for authenticated management UIs. */
+    public java.util.List<String> terminalOutputSnapshot(){
+        java.util.ArrayList<String> snapshot = new java.util.ArrayList<>();
+        for(String line : terminalOutput) snapshot.add(sanitizeTerminalText(line));
+        return snapshot;
+    }
+
+    /** Clears the bounded terminal history exposed to management UIs. */
+    public void clearTerminalOutput(){
+        terminalOutput.clear();
+    }
+
+    /**
+     * Terminal renderers may emit ANSI CSI/OSC sequences. They are valid for a
+     * local console but raw escape characters make the JSON terminal API invalid.
+     */
+    private static String sanitizeTerminalText(String value){
+        if(value == null) return "";
+        // Keep SGR sequences as a JSON-safe visible token (\\u001b[...m).
+        // The browser terminal converts that token back into styled spans.
+        String clean = value
+            .replaceAll("\\u001B\\][^\\u0007]*(?:\\u0007|$)", "")
+            .replace("\u001B", "\\u001b");
+        StringBuilder result = new StringBuilder(clean.length());
+        for(int i = 0; i < clean.length(); i++){
+            char c = clean.charAt(i);
+            if(c == '\n' || c == '\r' || c == '\t' || (c >= 0x20 && c != 0x7f)) result.append(c);
+        }
+        return result.toString();
+    }
+
     private void printServerHelpPage(int page){
         refreshLocalizedHelpSettings();
         Seq<Command> commands = handler.getCommandList();
@@ -1666,8 +1722,9 @@ public class ServerControl implements ApplicationListener{
             Jval root = Jval.read(YZFBridge.readTextSmart(file));
             if(root == null || !root.isObject()) return;
 
+            if(!root.getBool("enabled", true) || !root.getBool("foundationSupport", true)) return;
             int configuredPageSize = root.getInt("helpPageSize", root.getInt("pageSize", serverHelpPageSizeDefault));
-            serverHelpPageSize = Math.max(1, configuredPageSize);
+            serverHelpPageSize = configuredPageSize > 0 ? configuredPageSize : serverHelpPageSizeDefault;
 
             String language = root.getString("helpLanguage", "zh").trim().toLowerCase(Locale.ROOT);
             if(language.equals("en") || language.equals("english")){
@@ -1807,6 +1864,7 @@ public class ServerControl implements ApplicationListener{
                 run.run();
 
                 state.rules = state.map.applyRules(lastMode);
+                Events.fire(new RulesLoadEvent(state.rules));
                 logic.play();
 
                 reloader.end();
